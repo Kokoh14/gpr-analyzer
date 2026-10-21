@@ -13,7 +13,7 @@ from gpr_analyzer.report.i18n import Translator
 from gpr_analyzer.report.rules import action_rank, suggest_action
 from gpr_analyzer.report.schema import ACTION_LEVELS, LineResult, SurveyResult, Zone
 
-EVIDENCE_MARK = {"present": "✓", "absent": "✗", "warning": "⚠"}
+EVIDENCE_MARK = {"present": "✓", "absent": "✗", "warning": "⚠", "not_assessed": "–"}
 
 
 @dataclass
@@ -289,11 +289,17 @@ class _Composer:
         if z.evidence:
             items = []
             for e in z.evidence:
-                key = f"ev_{e.code}"
-                txt = self.t(key, **e.params) if self.tr.has(key) else (e.text or e.code)
-                items.append(f"{EVIDENCE_MARK[e.kind]} {txt}")
+                items.append(f"{EVIDENCE_MARK[e.kind]} {self.evidence_text(e)}")
             self.blocks.append(Para(self.t("evidence"), "small"))
             self.blocks.append(Bullets(items))
+
+    def evidence_text(self, e) -> str:
+        th, en = e.text, e.params.get("text_en", "")
+        if th or en:
+            th, en = th or en, en or th
+            return {"th": th, "en": en}.get(self.tr.lang) or (th if th == en else f"{th} / {en}")
+        key = f"ev_{e.code}"
+        return self.t(key, **e.params) if self.tr.has(key) else e.code
 
     def limitations(self) -> None:
         self.blocks.append(Heading(self.t("sec_limits")))
