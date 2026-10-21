@@ -31,16 +31,21 @@ class DetectParams:
 
 
 def analyze_line(r: Radargram, params: DetectParams | None = None, risk_context: RiskContext | None = None,
-                 velocity_m_per_ns: float | None = None) -> DetectionResult:
+                 velocity_m_per_ns: float | None = None, velocity_source: str | None = None) -> DetectionResult:
+    """Detect, classify and grade one line.
+
+    velocity_m_per_ns / velocity_source: pass the processing stage's velocity (e.g. its
+    hyperbola fit) to use it instead of this module's own estimate.
+    """
     p = params or DetectParams()
     contrast = contrast_section(r.data)
     c, per, top = contrast
     artifacts = detect_artifacts(r, p.artifacts)
-    hyps = find_hyperbolas(r, p.hyperbola, contrast=contrast)
+    hyps = find_hyperbolas(r, p.hyperbola, contrast=contrast, artifacts=artifacts)
     vel = estimate_velocity(r, p.hyperbola, hyperbolas=hyps)
 
     if velocity_m_per_ns is not None:
-        v, v_src = velocity_m_per_ns, "user"
+        v, v_src = velocity_m_per_ns, velocity_source or "user"
     elif p.use_hyperbola_velocity and vel and vel.n_fits >= p.min_velocity_fits:
         v, v_src = vel.velocity_m_per_ns, f"hyperbola_fit (n={vel.n_fits})"
     else:
@@ -48,7 +53,8 @@ def analyze_line(r: Radargram, params: DetectParams | None = None, risk_context:
         v_src = r.metadata.get("velocity_source", "default")
     depth_unc = velocity_depth_uncertainty(v, vel.spread_m_per_ns if vel and v_src.startswith("hyperbola") else None)
 
-    zones = find_zones(r, artifacts, velocity_m_per_ns=v, velocity_source=v_src, params=p.zones, contrast=contrast)
+    zones = find_zones(r, artifacts, velocity_m_per_ns=v, velocity_source=v_src, params=p.zones, contrast=contrast,
+                       hyperbolas=hyps)
     sign = p.surface_polarity if p.surface_polarity is not None else surface_polarity(r.data, per)
     ctx = Context(data=r.data.astype(float), contrast=c, period=per, surface_sign=sign, hyperbolas=hyps,
                   artifacts=artifacts, dt_ns=r.dt_ns)

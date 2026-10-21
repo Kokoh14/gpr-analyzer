@@ -75,3 +75,18 @@ def test_evidence_symbols_and_no_percentages():
     assert syms <= {"✓", "✗", "⚠", "–"}
     assert "⚠" in syms  # stripe right next to the zone
     assert "%" not in res.to_json()
+
+
+def test_crossing_layer_and_long_limbs_stay_separate():
+    line = (Line().direct_wave().point(80, 30, 2, aperture=80).point(220, 50, 2, aperture=80)
+            .layer(45, amp=1.0).noise(0.03))
+    res = analyze_line(line.radargram())
+
+    def at(x, t):
+        return [z for z in res.zones if z.trace_start <= x <= z.trace_end and z.time_start_ns <= t <= z.time_end_ns]
+
+    a, b = at(80, 30.5), at(220, 50.5)
+    assert len(a) == 1 and len(b) == 1 and a[0].id != b[0].id
+    assert a[0].suspected_type == ZoneType.POINT and b[0].suspected_type == ZoneType.POINT
+    layers = [z for z in res.zones if z.suspected_type == ZoneType.LAYER]
+    assert layers and max(z.n_traces for z in layers) >= 250

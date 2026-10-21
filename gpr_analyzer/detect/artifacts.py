@@ -30,12 +30,12 @@ class ArtifactParams:
     stripe_windows: int = 8
     stripe_neighbour_half: int = 25
     stripe_z: float = 3.5
-    stripe_min_fraction: float = 0.75  # share of depth windows where the band stands out
+    stripe_min_fraction: float = 0.5  # share of depth windows where the band stands out
     dead_rms_ratio: float = 1e-3
     clip_run: int = 3
     stationary_diff_ratio: float = 0.25
     stationary_min_traces: int = 3
-    noise_coherence: float = 0.3
+    noise_coherence: float = 0.4
     noise_rise: float = 1.5  # noise envelope must grow by this factor to count as gained
     noise_min_fraction: float = 0.05
 
@@ -125,6 +125,20 @@ def detect_abnormal_traces(r: Radargram, params: ArtifactParams | None = None) -
     return out
 
 
+def _lateral_coherence(d: np.ndarray, w: int, max_lag: int) -> np.ndarray:
+    """Per-sample median over trace pairs of the best normalised correlation within ±max_lag
+    samples: dipping events (hyperbola limbs) stay coherent, random noise does not."""
+    a = d[:, :-1]
+    best = np.full(a.shape, -np.inf)
+    ea = uniform_filter1d(a * a, w, axis=0)
+    for lag in range(-max_lag, max_lag + 1):
+        b = np.roll(d[:, 1:], lag, axis=0)
+        num = uniform_filter1d(a * b, w, axis=0)
+        den = np.sqrt(ea * uniform_filter1d(b * b, w, axis=0))
+        best = np.maximum(best, num / np.maximum(den, 1e-12))
+    return uniform_filter1d(np.median(best, axis=1), w, mode="nearest")
+
+
 def detect_bottom_noise(r: Radargram, params: ArtifactParams | None = None) -> list[ArtifactFlag]:
     p = params or ArtifactParams()
     d = r.data.astype(np.float64)
@@ -132,17 +146,13 @@ def detect_bottom_noise(r: Radargram, params: ArtifactParams | None = None) -> l
     if n_t < 4 or n_s < 20:
         return []
     per = dominant_period_samples(d)
-    w = max(3, 2 * per)
-    a, b = d[:, :-1], d[:, 1:]
-    num = uniform_filter1d(a * b, w, axis=0)
-    den = np.sqrt(uniform_filter1d(a * a, w, axis=0) * uniform_filter1d(b * b, w, axis=0))
-    coh = np.median(num / np.maximum(den, 1e-12), axis=1)
-    coh = uniform_filter1d(coh, w, mode="nearest")
+    w = max(3, 4 * per)
+    coh = _lateral_coherence(d, w, max_lag=max(1, per // 3))
     coherent = np.flatnonzero(coh >= p.noise_coherence)
     s0 = int(coherent[-1]) + 1 if coherent.size else 0
     if n_s - s0 < p.noise_min_fraction * n_s:
         return []
-    m = uniform_filter1d(np.median(envelope(d), axis=1), w, mode="nearest")
+    m = uniform_filter1d(np.median(envelope(d), axis=1), max(3, per), mode="nearest")
     region = m[s0:n_s - w]  # Hilbert edge effects inflate the last few samples
     if region.size < p.noise_min_fraction * n_s:
         return []
@@ -150,8 +160,9 @@ def detect_bottom_noise(r: Radargram, params: ArtifactParams | None = None) -> l
     base = region[i_min]
     if base <= 0 or region[-max(1, len(region) // 8):].mean() < p.noise_rise * base:
         return []
-    rising = np.flatnonzero(region[i_min:] > p.noise_rise * base)
-    onset = s0 + i_min + (int(rising[0]) if rising.size else 0)
+    # onset = where the noise rises above rise × base for good (a bright target is a bump that falls back)
+    below = np.flatnonzero(region[i_min:] <= p.noise_rise * base)
+    onset = s0 + i_min + (int(below[-1]) + 1 if below.size else 0)
     if n_s - onset < p.noise_min_fraction * n_s:
         return []
     t0 = onset * r.dt_ns

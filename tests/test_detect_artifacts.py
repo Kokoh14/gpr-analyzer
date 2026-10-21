@@ -65,3 +65,8 @@ def test_artifact_flags_have_ids_and_bilingual_reason():
     assert len({f.id for f in flags}) == len(flags)
     for f in flags:
         assert f.reason_th and f.reason_en
+
+
+def test_tall_wide_target_edges_are_not_stripes():
+    r = base().void(100, 160, 20, 85, amp=3.0, multiples=6).radargram()
+    assert detect_vertical_stripes(r) == []

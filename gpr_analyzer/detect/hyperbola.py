@@ -16,7 +16,7 @@ from scipy.ndimage import maximum_filter
 
 from gpr_analyzer.core import Radargram
 from gpr_analyzer.detect._signal import contrast_section
-from gpr_analyzer.detect.models import Hyperbola, VelocityEstimate
+from gpr_analyzer.detect.models import ArtifactFlag, Hyperbola, VelocityEstimate
 
 
 @dataclass
@@ -35,7 +35,7 @@ class HyperbolaParams:
     time_zero_ns: float = 0.0
 
 
-def _follow_limb(c, x0, s0, step, p, dt, dx, t0_ns, per):
+def _follow_limb(c, x0, s0, step, p, dt, dx, t0_ns, per, skip=None):
     """Follow one limb outward from the apex. Returns list of (offset_m, t_ns).
 
     Each pick must lie inside the time window allowed by [v_min, v_max] *relative to the
@@ -55,6 +55,8 @@ def _follow_limb(c, x0, s0, step, p, dt, dx, t0_ns, per):
         x = x0 + step * k
         if x < 0 or x >= n_t:
             break
+        if skip is not None and skip[x]:
+            continue  # artifact column: neither a pick nor a miss
         lo_k, hi_k = window(k)
         lo_p, hi_p = window(prev_k)
         lo = max(prev_t, max(lo_k, prev_t + (lo_k - lo_p)) - tol) + p.time_zero_ns
@@ -78,8 +80,42 @@ def _follow_limb(c, x0, s0, step, p, dt, dx, t0_ns, per):
     return picks
 
 
+def _refine_apex(c, s0, x0, per):
+    """Move the apex to the earliest arrival nearby: near the top a hyperbola is flat, so the
+    brightest trace is often a few traces off the true apex."""
+    n_s, n_t = c.shape
+    a, b = max(0, x0 - per), min(n_t, x0 + per + 1)
+    lo, hi = max(0, s0 - per), min(n_s, s0 + per + 1)
+    t = lo + np.argmax(c[lo:hi, a:b], axis=0)
+    ok = c[t, np.arange(a, b)] >= 0.7 * c[s0, x0]
+    if not ok.any():
+        return s0, x0
+    tmin = t[ok].min()
+    cols = np.flatnonzero(ok & (t <= tmin))
+    xr = a + int(round(np.median(cols)))
+    return int(t[xr - a]), xr
+
+
+def _continues_upward(c, s0, x0, step, per):
+    """True when, on the side opposite the limb, the event carries on to earlier times."""
+    n_s, n_t = c.shape
+    lo, hi = max(0, s0 - 3 * per), max(0, s0 - per // 2)
+    if hi <= lo:
+        return False
+    for k in range(1, per + 1):
+        x = x0 + step * k
+        if not 0 <= x < n_t:
+            return False
+        if c[lo:hi, x].max() >= 0.5 * c[s0, x0]:
+            return True
+    return False
+
+
 def find_hyperbolas(r: Radargram, params: HyperbolaParams | None = None,
-                    contrast: tuple[np.ndarray, int, int] | None = None) -> list[Hyperbola]:
+                    contrast: tuple[np.ndarray, int, int] | None = None,
+                    artifacts: list[ArtifactFlag] | None = None) -> list[Hyperbola]:
+    """Hyperbola candidates. Apexes on or next to artifact traces, or inside the gained bottom
+    noise, are skipped, and limbs step over artifact traces."""
     p = params or HyperbolaParams()
     c, per, top = contrast_section(r.data) if contrast is None else contrast
     n_s, n_t = c.shape
@@ -92,6 +128,13 @@ def find_hyperbolas(r: Radargram, params: HyperbolaParams | None = None,
     # 3 % tolerance: near the apex the hyperbola is flat and noise decides which trace is highest
     peaks = (c >= 0.97 * maximum_filter(c, size=(2 * per + 1, 2 * per + 1))) & (c >= p.contrast_threshold)
     peaks[:top] = False
+    skip = np.zeros(n_t, dtype=bool)
+    for a in artifacts or []:
+        if a.kind in ("vertical_stripe", "dead_trace", "clipped_trace"):
+            skip[a.trace_start:a.trace_end + 1] = True
+            peaks[:, a.trace_start:a.trace_end + 1] = False
+        elif a.kind == "bottom_noise":
+            peaks[int(a.time_start_ns / r.dt_ns):] = False
     ss, xs = np.nonzero(peaks)
     order = np.argsort(-c[ss, xs])[: p.max_candidates]
     found: list[Hyperbola] = []
@@ -100,11 +143,20 @@ def find_hyperbolas(r: Radargram, params: HyperbolaParams | None = None,
         s0, x0 = int(ss[i]), int(xs[i])
         if taken[s0, x0]:
             continue
+        s0, x0 = _refine_apex(c, s0, x0, per)
+        if skip[x0]:  # apex on an artifact trace: start from the nearest clean neighbour
+            clean = np.flatnonzero(~skip)
+            if clean.size == 0:
+                continue
+            x0 = int(clean[np.argmin(np.abs(clean - x0))])
+            s0 = max(0, s0 - per) + int(np.argmax(c[max(0, s0 - per):s0 + per + 1, x0]))
+        if taken[s0, x0]:
+            continue
         t0 = s0 * r.dt_ns - p.time_zero_ns
         if t0 <= 0:
             continue
-        left = _follow_limb(c, x0, s0, -1, pp, r.dt_ns, dx, t0, per)
-        right = _follow_limb(c, x0, s0, +1, pp, r.dt_ns, dx, t0, per)
+        left = _follow_limb(c, x0, s0, -1, pp, r.dt_ns, dx, t0, per, skip)
+        right = _follow_limb(c, x0, s0, +1, pp, r.dt_ns, dx, t0, per, skip)
         min_mo = p.min_moveout_periods * per * r.dt_ns
 
         def limb_ok(side):  # a flat side (cavity roof, layer) is not a limb
@@ -115,6 +167,8 @@ def find_hyperbolas(r: Radargram, params: HyperbolaParams | None = None,
         both = bool(left) and bool(right)
         # one limb only: line ends, or the edge of a cavity roof (the other side is the flat roof)
         one_sided = not both and max(len(left), len(right)) >= p.min_picks_total
+        if one_sided and _continues_upward(c, s0, x0, -1 if right else 1, per):
+            continue  # a point part-way down a limb (e.g. where a layer crosses it), not an apex
         if not (both or one_sided) or len(left) + len(right) < p.min_picks_total:
             continue
         pts = np.array([(0.0, t0)] + left + right)
@@ -130,7 +184,7 @@ def find_hyperbolas(r: Radargram, params: HyperbolaParams | None = None,
         v = 2.0 / np.sqrt(slope)
         if dx_known and not (p.v_min <= v <= p.v_max):
             continue
-        half = max(len(left), len(right))
+        half = max((round(d / dx) for d, _ in left + right), default=0)
         a, b = max(0, x0 - half), min(n_t, x0 + half + 1)
         lo = max(0, s0 - per)
         hi = min(n_s, int(pts[:, 1].max() / r.dt_ns) + per + 1)
@@ -139,7 +193,8 @@ def find_hyperbolas(r: Radargram, params: HyperbolaParams | None = None,
         found.append(Hyperbola(
             apex_trace=x0, apex_time_ns=float(t0 + p.time_zero_ns), amplitude=float(c[s0, x0]),
             fit_r2=round(r2, 4), n_picks=len(pts), half_width_traces=half, velocity_m_per_ns=vel,
-            apex_depth_m=(vel * t0 / 2.0) if vel else None, one_sided=one_sided))
+            apex_depth_m=(vel * t0 / 2.0) if vel else None, one_sided=one_sided,
+            side=0 if both else (-1 if left else 1)))
     found.sort(key=lambda h: (h.apex_trace, h.apex_time_ns))
     return found
 
@@ -149,7 +204,11 @@ def estimate_velocity(r: Radargram, params: HyperbolaParams | None = None,
     """Median velocity of the accepted hyperbola fits, or None if there are none."""
     hs = find_hyperbolas(r, params) if hyperbolas is None else hyperbolas
     vs = np.array([h.velocity_m_per_ns for h in hs if h.velocity_m_per_ns])
-    if vs.size < min_fits or vs.size == 0:
+    if vs.size >= 3:  # drop fits that disagree with the rest (crossing events, mis-picked limbs)
+        med = np.median(vs)
+        mad = 1.4826 * np.median(np.abs(vs - med))
+        vs = vs[np.abs(vs - med) <= max(2.5 * mad, 0.05 * med)]
+    if vs.size < max(min_fits, 1):
         return None
     q1, q3 = np.percentile(vs, [25, 75])
     return VelocityEstimate(float(np.median(vs)), float((q3 - q1) / 2), int(vs.size))

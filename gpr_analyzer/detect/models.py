@@ -107,6 +107,7 @@ class Hyperbola:
     velocity_m_per_ns: float | None  # None when dx_m is unknown
     apex_depth_m: float | None = None
     one_sided: bool = False  # only one limb found (line end or cavity edge)
+    side: int = 0  # 0 both limbs, −1 left limb only, +1 right limb only
 
 
 @dataclass

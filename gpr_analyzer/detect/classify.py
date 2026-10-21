@@ -87,6 +87,7 @@ def zone_features(z: Zone, ctx: Context, p: ClassifyParams) -> dict[str, Any]:
     f["continuous"] = f["roof_coverage"] >= 0.8 and f["roof_resid_periods"] <= 1.0
     f["thin"] = f["n_samples"] <= 3 * per
     f["wide"] = z.n_traces >= max(30, n_t // 5)
+    f["narrow_tall"] = z.n_traces <= 5 and (s1 - s0) >= 0.3 * n_s
     f["bounded"] = x0 > 2 and x1 < n_t - 3 and z.n_traces < 0.6 * n_t
     f["full_line_flat"] = (z.n_traces >= 0.9 * n_t and f["continuous"]
                            and abs(f["roof_slope_samples_per_trace"]) * n_t <= per)
@@ -105,6 +106,7 @@ def zone_features(z: Zone, ctx: Context, p: ClassifyParams) -> dict[str, Any]:
     central = [h for h in inside if abs(h.apex_trace - centre) <= 0.25 * half * 2 and not h.one_sided]
     f["central_apex"] = len(central) >= 1
     f["n_apex"] = len(inside)
+    f["n_apex_two_sided"] = sum(not h.one_sided for h in inside)
     roof_level = [h for h in inside if abs(h.apex_time_ns - t_roof) <= 2 * per * ctx.dt_ns]
     left = [h for h in roof_level if h.apex_trace < centre - 0.15 * half]
     right = [h for h in roof_level if h.apex_trace > centre + 0.15 * half]
@@ -235,7 +237,7 @@ def assess_layer(f) -> TypeAssessment | None:
     ev = [E(_yn(f["continuous"]), "continuous", "แนวสะท้อนต่อเนื่องหลาย trace", "reflection continuous over many traces"),
           E(_yn(f["wide"]), "wide", f"ยาว {f['n_traces']} traces", f"{f['n_traces']} traces long"),
           E(_yn(f["thin"]), "thin", "บาง (ไม่เกิน ~3 คาบคลื่น)", "thin (≤ ~3 wavelet periods)"),
-          E("absent" if f["n_apex"] else "found", "no_apex", "ไม่มียอด hyperbola ในแนว",
+          E("absent" if f["n_apex_two_sided"] else "found", "no_apex", "ไม่มียอด hyperbola ในแนว",
             "no hyperbola apex along it")]
     if f["full_line_flat"]:
         ev.append(E("warning", "possible_ringing", "แนวราบเวลาเดียวกันตลอดเส้น อาจเป็น ringing ของเสาอากาศ ไม่ใช่ชั้นจริง",
@@ -243,7 +245,7 @@ def assess_layer(f) -> TypeAssessment | None:
     if not f["continuous"]:
         return None
     if f["wide"] and f["thin"]:
-        lvl = Confidence.HIGH if not f["n_apex"] else Confidence.MEDIUM
+        lvl = Confidence.HIGH if not f["n_apex_two_sided"] else Confidence.MEDIUM
     elif f["wide"] or f["thin"]:
         lvl = Confidence.MEDIUM
     else:
@@ -317,6 +319,10 @@ def assess_artifact(f) -> TypeAssessment | None:
         ev.append(E("found", "in_bottom_noise", "อยู่ในช่วง noise ก้นภาพที่ถูก gain ขยาย",
                     "inside the gain-amplified bottom noise"))
         lvl = Confidence.HIGH
+    if f["narrow_tall"]:
+        ev.append(E("found", "narrow_tall", "แคบไม่กี่ trace แต่สูงเกือบทั้งความลึก ลักษณะแถบแนวตั้ง",
+                    "only a few traces wide but spans much of the depth: a vertical band"))
+        lvl = lvl or Confidence.MEDIUM
     if f["stationary_overlap"] >= 0.5:
         ev.append(E("found", "stationary", "อยู่บน trace ที่หยุดเดิน", "on stationary (stopped) traces"))
         lvl = lvl or Confidence.MEDIUM
@@ -354,7 +360,9 @@ def classify_zone(z: Zone, ctx: Context, params: ClassifyParams | None = None) -
         z.evidence = [E("absent", "no_pattern", "ไม่เข้าลักษณะประเภทใดชัด", "matches no type clearly")] + warn
         z.alternatives = []
         return z
-    cands.sort(key=lambda a: (a.confidence.rank, PRIORITY[a.type]), reverse=True)
+    # same level: the type with more of its own signs found wins, then the more conservative type
+    cands.sort(key=lambda a: (a.confidence.rank, sum(e.status == "found" for e in a.evidence), PRIORITY[a.type]),
+               reverse=True)
     best = cands[0]
     z.suspected_type, z.confidence = best.type, best.confidence
     z.evidence = best.evidence + warn

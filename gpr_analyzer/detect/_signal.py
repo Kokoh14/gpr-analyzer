@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.ndimage import median_filter, uniform_filter, uniform_filter1d
+from scipy.ndimage import median_filter, uniform_filter
 from scipy.signal import hilbert
 
 
