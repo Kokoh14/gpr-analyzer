@@ -33,7 +33,8 @@ def zones_csv(survey: SurveyResult, path: str | os.PathLike | None = None) -> st
         w.writerow(row)
     text = buf.getvalue()
     if path is not None:
-        Path(path).write_text(text, encoding="utf-8-sig")  # BOM so Excel reads Thai
+        # BOM so Excel reads Thai; newline="" keeps the csv module's \r\n (else Windows writes \r\r\n = blank rows)
+        Path(path).write_text(text, encoding="utf-8-sig", newline="")
     return text
 
 

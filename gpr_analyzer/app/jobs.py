@@ -577,7 +577,7 @@ class Job:
                                    ("job_id", "feature", "source", "rating", "note"))
         else:
             raise KeyError(name)
-        path.write_text(text, encoding="utf-8")
+        path.write_text(text, encoding="utf-8", newline="")  # text already has \r\n line ends
         return path
 
     def set_info(self, d: dict[str, Any]) -> None:
