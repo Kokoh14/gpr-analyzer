@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpr-analyzer"
+version = "0.1.0"
+description = "Automatic GPR (ground-penetrating radar) processing, anomaly detection and reporting"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10", "matplotlib>=3.7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+gpr-sniff = "gpr_analyzer.io.sniff:main"
+
+[tool.setuptools.packages.find]
+include = ["gpr_analyzer*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
