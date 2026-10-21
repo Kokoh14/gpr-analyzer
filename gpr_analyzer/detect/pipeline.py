@@ -136,6 +136,17 @@ def to_report_records(res: DetectionResult, line_id: str = "") -> tuple[list[dic
     return zones, regions
 
 
+# velocity sources from an earlier stage that detect should keep rather than re-estimate
+_UPSTREAM_VELOCITY = ("hyperbola_fit", "user")
+
+
 def detect_zones(r: Radargram, line_id: str = "", **kw: Any) -> tuple[list[dict], list[dict]]:
-    """Hook used by the CLI (gpr_analyzer.cli): analyze_line + to_report_records."""
+    """Hook used by the CLI (gpr_analyzer.cli): analyze_line + to_report_records.
+
+    When processing already fitted the velocity (or the user set it), that value is used so the
+    line table and the zone depths in the report agree.
+    """
+    src = r.metadata.get("velocity_source")
+    if "velocity_m_per_ns" not in kw and src in _UPSTREAM_VELOCITY:
+        kw["velocity_m_per_ns"], kw["velocity_source"] = r.velocity_m_per_ns, src
     return to_report_records(analyze_line(r, **kw), line_id=line_id)

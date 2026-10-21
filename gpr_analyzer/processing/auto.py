@@ -101,7 +101,10 @@ def auto_process(rg: Radargram, options: ProcessingOptions | None = None) -> tup
 
     The returned radargram carries metadata["velocity_source"] (report code) and
     metadata["processing"] (same steps). Use run_pipeline for the other tracks.
+    A radargram whose metadata["velocity_source"] is "user" keeps its velocity (CLI --velocity).
     """
+    if options is None and rg.metadata.get("velocity_source") == "user":
+        options = ProcessingOptions(velocity_m_per_ns=rg.velocity_m_per_ns)
     res = run_pipeline(rg, options)
     out = res.analysis.copy_with()
     steps = res.report_steps()
@@ -180,11 +183,13 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None) -> Pro
             wtr = None
             why = "global mean trace" + (" (no trace spacing in file)" if rg.dx_m is None and opt.background != "global" else "")
         else:
-            wm = opt.background_window_m or 10.0
+            # A sliding median removes any flat event wider than half the window, so the window must be
+            # at least twice the widest void roof we want to keep (the sample line shows one ~7.5 m wide).
+            wm = opt.background_window_m or 30.0
             wtr = _odd(wm / rg.dx_m)
             why = (
                 "user window" if opt.background_window_m
-                else "10 m sliding window: wider than the hyperbolas expected in the time window, narrow enough to follow ringing changes"
+                else "30 m sliding window: flat events narrower than 15 m (void roofs) survive; on longer lines it still follows ringing changes"
             )
             if wtr >= d.shape[1]:
                 wtr = None

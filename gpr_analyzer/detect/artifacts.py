@@ -29,6 +29,7 @@ from gpr_analyzer.detect.models import ArtifactFlag
 class ArtifactParams:
     stripe_windows: int = 8
     stripe_neighbour_half: int = 25
+    stripe_guard: int = 12  # neighbours start this many traces away, so wide bands (e.g. 365–385) still stand out
     stripe_z: float = 3.5
     stripe_min_fraction: float = 0.5  # share of depth windows where the band stands out
     dead_rms_ratio: float = 1e-3
@@ -70,7 +71,8 @@ def detect_vertical_stripes(r: Radargram, params: ArtifactParams | None = None) 
         for w in range(filled.shape[0]):
             filled[w, dead] = np.interp(np.flatnonzero(dead), good, logw[w, good])
     half = min(p.stripe_neighbour_half, max(3, n_t // 4))
-    med, mad = running_median_excluding(filled, half)
+    guard = min(p.stripe_guard, max(0, n_t // 8))
+    med, mad = running_median_excluding(filled, half, guard)
     z = (filled - med) / np.maximum(mad, 0.05)
     frac = (np.abs(z) > p.stripe_z).mean(axis=0)
     mask = (frac >= p.stripe_min_fraction) & ~dead

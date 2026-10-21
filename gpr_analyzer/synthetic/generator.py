@@ -39,6 +39,24 @@ class Layer:
 
 
 @dataclass
+class Cavity:
+    """Air-filled void between x_start_m and x_end_m, roof at depth_top_m, floor at depth_bottom_m.
+
+    Air is faster and has lower permittivity than soil, so the roof reflection has reversed polarity,
+    the floor has normal polarity, and energy rings inside the void (multiples). The roof corners
+    diffract, giving a hyperbola tail at each edge. Ringing multiples are spaced by the air two-way
+    time, which is far shorter than in soil, so `multiples` of them fit between roof and floor.
+    """
+
+    x_start_m: float
+    x_end_m: float
+    depth_top_m: float
+    depth_bottom_m: float
+    amplitude: float = 1.0
+    multiples: int = 3
+
+
+@dataclass
 class SyntheticTruth:
     """Ground truth of a synthetic scene, in the same units the pipeline reports."""
 
@@ -47,6 +65,7 @@ class SyntheticTruth:
     time_zero_ns: float
     targets: list[PointTarget] = field(default_factory=list)
     layers: list[Layer] = field(default_factory=list)
+    cavities: list[Cavity] = field(default_factory=list)
     ringing_ns: float | None = None
     artifact_traces: list[int] = field(default_factory=list)
     noise_std: float = 0.0
@@ -79,6 +98,7 @@ def make_scene(
     attenuation_db_per_ns: float = 0.25,
     noise_std: float = 0.002,
     seed: int = 0,
+    cavities: list[Cavity] | None = None,
 ) -> tuple[Radargram, SyntheticTruth]:
     """Build a radargram resembling the SubScan sample line (555 traces, ~145 ns).
 
@@ -86,6 +106,7 @@ def make_scene(
     - direct wave at time_zero_ns with per-trace jitter (time-zero correction test)
     - point targets -> diffraction hyperbolas t(x) = 2 sqrt(d^2 + (x-x0)^2) / v
     - layers -> continuous horizontal or dipping reflectors
+    - cavities -> reversed-polarity roof, ringing multiples, floor and edge diffractions
     - ringing band: identical horizontal event on every trace (background removal test)
     - artifact traces: full-depth vertical stripes (antenna lift / stop)
     - wow: slow DC drift per trace (dewow test)
@@ -121,6 +142,22 @@ def make_scene(
     for ly in layers:
         tl = 2.0 * (ly.depth_m + ly.dip * (x - x.mean())) / v
         sub += ly.amplitude * ricker(t - tz - tl, freq_mhz)
+    cavities = list(cavities or [])
+    for cv in cavities:
+        inside = (x >= cv.x_start_m) & (x <= cv.x_end_m)  # (1, traces)
+        t_top = 2.0 * cv.depth_top_m / v
+        t_bot = 2.0 * cv.depth_bottom_m / v
+        step = (t_bot - t_top) / (cv.multiples + 1)
+        ev = -cv.amplitude * ricker(t - tz - t_top, freq_mhz)
+        for k in range(1, cv.multiples + 1):
+            ev += -cv.amplitude * 0.6**k * ricker(t - tz - t_top - k * step, freq_mhz)
+        ev += 0.5 * cv.amplitude * ricker(t - tz - t_bot, freq_mhz)
+        sub += ev * inside
+        for xe in (cv.x_start_m, cv.x_end_m):
+            outside = (x < cv.x_start_m) if xe == cv.x_start_m else (x > cv.x_end_m)
+            outside = outside & (np.abs(x - xe) <= cv.depth_top_m)  # corner diffractions fade within ~45 degrees
+            r = np.sqrt(cv.depth_top_m**2 + (x - xe) ** 2)
+            sub += -0.6 * cv.amplitude * (cv.depth_top_m / r) * ricker(t - tz - 2.0 * r / v, freq_mhz) * outside
     rel_t = np.clip(t - tz, 0.0, None)
     sub *= 10.0 ** (-attenuation_db_per_ns * rel_t / 20.0)
 
@@ -156,6 +193,7 @@ def make_scene(
         time_zero_ns=time_zero_ns,
         targets=list(targets),
         layers=list(layers),
+        cavities=cavities,
         ringing_ns=ringing_ns,
         artifact_traces=[i for i in artifact_traces if 0 <= i < n_traces],
         noise_std=noise_std,
@@ -191,4 +229,20 @@ def single_hyperbola(
         wow_amplitude=0.0,
         attenuation_db_per_ns=0.0,
         noise_std=0.0,
+    )
+
+
+def subscan_like_line(seed: int = 7) -> tuple[Radargram, SyntheticTruth]:
+    """The end-to-end demo line: shaped like the SubScan sample (555 traces at 5 cm, ~145 ns, 250 MHz,
+    v = 0.135 m/ns) with a pipe, a layer, a void-like cavity near traces 150-300 at about 5 m and the
+    stripe band around traces 365-385 seen on the sample screen."""
+    return make_scene(
+        velocity_m_per_ns=0.135,
+        targets=[PointTarget(x_m=3.0, depth_m=1.2, amplitude=1.0), PointTarget(x_m=22.0, depth_m=2.4, amplitude=1.0)],
+        layers=[Layer(depth_m=2.0, amplitude=0.35, dip=0.01)],
+        cavities=[Cavity(x_start_m=7.5, x_end_m=15.0, depth_top_m=5.25, depth_bottom_m=7.3, amplitude=2.5)],
+        artifact_traces=[200, 240, 260, 310] + list(range(365, 386)),
+        attenuation_db_per_ns=0.12,
+        noise_std=0.003,
+        seed=seed,
     )

@@ -89,6 +89,7 @@ def read_segy(path: str | Path, dt_unit: str = "auto") -> list[Radargram]:
     headers = buf[:, :TRACE_HEADER_BYTES].copy()
     cdp_x = headers[:, 180:184].copy().view(f"{endian}i4").ravel()
     cdp_y = headers[:, 184:188].copy().view(f"{endian}i4").ravel()
+    dx_m = _trace_spacing(headers, cdp_x, cdp_y, endian)
 
     meta = {
         "format": "segy",
@@ -100,7 +101,24 @@ def read_segy(path: str | Path, dt_unit: str = "auto") -> list[Radargram]:
         "cdp_x": cdp_x,
         "cdp_y": cdp_y,
     }
-    return [Radargram(data.T.astype(np.float32), dt_ns=dt_ns, metadata=meta)]
+    if dx_m is not None:
+        meta["dx_from"] = "CDP coordinates"
+    return [Radargram(data.T.astype(np.float32), dt_ns=dt_ns, dx_m=dx_m, metadata=meta)]
+
+
+def _trace_spacing(headers: np.ndarray, cdp_x: np.ndarray, cdp_y: np.ndarray, endian: str) -> float | None:
+    """Median step between CDP coordinates when they are lengths (coordinate units 1 or unset) and
+    move along the line; None otherwise (e.g. arc-seconds, or every trace at the same point)."""
+    if len(cdp_x) < 2:
+        return None
+    scalar = int(headers[0, 70:72].copy().view(f"{endian}i2")[0])
+    units = int(headers[0, 88:90].copy().view(f"{endian}i2")[0])
+    if units not in (0, 1):
+        return None
+    scale = float(scalar) if scalar > 0 else (1.0 / -scalar if scalar < 0 else 1.0)
+    step = np.hypot(np.diff(cdp_x.astype(np.float64)), np.diff(cdp_y.astype(np.float64))) * scale
+    dx = float(np.median(step))
+    return dx if dx > 0 and np.isfinite(dx) else None
 
 
 def write_segy(radargram: Radargram, path: str | Path) -> None:
@@ -129,6 +147,10 @@ def write_segy(radargram: Radargram, path: str | Path) -> None:
         for i in range(r.n_traces):
             th = bytearray(TRACE_HEADER_BYTES)
             struct.pack_into(">ii", th, 0, i + 1, i + 1)
+            if r.dx_m:  # position along the line in mm (scalar -1000) so the reader recovers dx
+                struct.pack_into(">h", th, 70, -1000)
+                struct.pack_into(">i", th, 180, int(round(i * r.dx_m * 1000)))
+                struct.pack_into(">h", th, 88, 1)
             struct.pack_into(">Hh", th, 114, r.n_samples, dt_ps)
             f.write(th)
             f.write(r.data[:, i].astype(">f4").tobytes())

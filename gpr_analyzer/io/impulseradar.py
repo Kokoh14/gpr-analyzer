@@ -63,6 +63,11 @@ def _read_pair(header_path: Path, data_path: Path, bytes_per_sample: int, fmt: s
     cor = data_path.with_suffix(".cor")
     if cor.exists():
         meta["gps"] = read_cor(cor)
+    # SOIL VELOCITY is the field velocity in m/us (CrossOver spec); 0 or missing = not set
+    v_soil = to_float(header.get("SOIL VELOCITY"))
+    if v_soil and 10.0 <= v_soil <= 300.0:
+        meta["velocity_m_per_ns"] = v_soil / 1000.0
+        return Radargram(data, dt_ns=dt_ns, dx_m=dx, velocity_m_per_ns=v_soil / 1000.0, metadata=meta)
     return Radargram(data, dt_ns=dt_ns, dx_m=dx, metadata=meta)
 
 

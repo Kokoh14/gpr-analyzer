@@ -12,6 +12,7 @@ from gpr_analyzer.io.gssi import read_dzt
 from gpr_analyzer.io.impulseradar import read_cor, read_impulseradar, read_mala
 from gpr_analyzer.io.segy import read_segy, write_segy
 from gpr_analyzer.io.sensoft import read_dt1
+from gpr_analyzer.io.writers import write
 
 READERS = {
     ".iprh": read_impulseradar,
@@ -53,6 +54,7 @@ __all__ = [
     "read_dt1",
     "read_segy",
     "write_segy",
+    "write",
     "READERS",
     "SUPPORTED_EXTENSIONS",
 ]

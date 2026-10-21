@@ -62,7 +62,7 @@ def analyze_radargram(r: Any, line_id: str, source: str, velocity: float | None 
     vsrc = r.metadata.get("velocity_source", "file_header" if "velocity_m_per_ns" in r.metadata else "default")
     if velocity is not None:
         r = r.copy_with(velocity_m_per_ns=velocity)
-        vsrc = "user"
+        r.metadata["velocity_source"] = vsrc = "user"  # processing and detect keep it instead of fitting
     steps: list[ProcessingStep] = []
     if hooks.get("process"):
         res = hooks["process"](r)

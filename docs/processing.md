@@ -16,7 +16,7 @@ through `ProcessingOptions`.
 | 2 | Dewow | Subtract a Gaussian-smoothed trace, window = 2 periods |
 | 3 | Time zero | Direct-wave peak per trace (sub-sample), aligned to the median, samples above cut |
 | 4 | Bandpass | Butterworth 4, zero-phase, 0.4×–2× centre frequency |
-| 5 | Background removal | Sliding **median** over 10 m (global if line shorter / no dx). Median avoids flat ghosts of hyperbola apexes |
+| 5 | Background removal | Sliding **median** over 30 m (global if line shorter / no dx). Median avoids flat ghosts of hyperbola apexes. The window was 10 m until the end-to-end test showed it erased a 7.5 m flat void roof: a median removes anything flat over more than half its window |
 | 6 | Gain (SEC) | Exponential, rate fitted to the 90th-percentile envelope decay; held constant from where signal meets 2× noise floor; max 60 dB |
 | 7 | Velocity | x²–t² hyperbola fits (median of accepted fits); falls back to header, then 0.1 m/ns and says so |
 | 8 | Migration | Off by default; `stolt` or `kirchhoff` |

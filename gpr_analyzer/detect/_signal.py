@@ -79,14 +79,18 @@ def surface_polarity(data: np.ndarray, period: int) -> int:
     return int(np.sign(mean[k]))
 
 
-def running_median_excluding(values: np.ndarray, half: int) -> tuple[np.ndarray, np.ndarray]:
-    """Median and MAD of each column's neighbours (±half, centre excluded) along the last axis."""
+def running_median_excluding(values: np.ndarray, half: int, guard: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Median and MAD of each column's neighbours along the last axis: `half` columns on each side,
+    skipping the centre and the `guard` columns next to it (so a band up to ~2·guard wide is compared
+    with columns outside it, not with itself)."""
     n = values.shape[-1]
     med = np.empty_like(values)
     mad = np.empty_like(values)
     for i in range(n):
-        lo, hi = max(0, i - half), min(n, i + half + 1)
-        nb = np.concatenate([values[..., lo:i], values[..., i + 1:hi]], axis=-1)
+        lo, hi = max(0, i - guard - half), min(n, i + guard + half + 1)
+        nb = np.concatenate([values[..., lo:max(lo, i - guard)], values[..., min(hi, i + guard + 1):hi]], axis=-1)
+        if nb.shape[-1] == 0:
+            nb = np.concatenate([values[..., :i], values[..., i + 1:]], axis=-1)
         m = np.median(nb, axis=-1)
         med[..., i] = m
         mad[..., i] = 1.4826 * np.median(np.abs(nb - m[..., None]), axis=-1)
