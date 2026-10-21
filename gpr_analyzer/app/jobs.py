@@ -19,7 +19,8 @@ from typing import Any
 
 import numpy as np
 
-from gpr_analyzer.app.files import InputGroup, preview_text, sort_files
+from gpr_analyzer.app import compare as cmp
+from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
 from gpr_analyzer.core import Radargram
 from gpr_analyzer.detect import analyze_line, to_report_records
 from gpr_analyzer.io import read as read_file
@@ -200,6 +201,7 @@ class Job:
     problems: list[dict[str, str]] = field(default_factory=list)  # files that could not be read
     unassigned: list[dict[str, Any]] = field(default_factory=list)
     created: str = field(default_factory=_now)
+    comparison: dict[str, Any] = field(default_factory=cmp.new_state)  # see compare.py
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -209,6 +211,10 @@ class Job:
     @property
     def labels_path(self) -> Path:
         return self.folder / "labels.jsonl"
+
+    @property
+    def ref_dir(self) -> Path:
+        return self.folder / "reference"
 
     def line(self, line_id: str) -> LineState:
         for ln in self.lines:
@@ -333,6 +339,45 @@ class Job:
 
     def save(self) -> None:
         (self.folder / "survey.json").write_text(self.survey().to_json(), encoding="utf-8")
+        comp = self.comparison_json()
+        zones = [z for ln in self.lines for z in ln.zones]
+        state = {
+            "version": 1, "job_id": self.job_id, "created": self.created, "saved": _now(), "info": asdict(self.info),
+            "lang": self.lang, "reviewer": self.reviewer,
+            "lines": [{"line_id": ln.line_id, "source_file": ln.source_file, "options": options_dict(ln.options),
+                       "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones} for ln in self.lines],
+            "comparison": self.comparison,
+            # read by the job list and the all-jobs comparison export without reprocessing
+            "summary": {"n_lines": len(self.lines), "files": sorted({ln.source_file for ln in self.lines}),
+                        "review": review_counts(zones), "compare": comp["total"]},
+            "compare_lines": [{"line_id": k, **{x: v[x] for x in ("source_file", "summary", "meta_check")}}
+                              for k, v in comp["lines"].items()],
+            "compare_rows": self.comparison_rows(comp),
+        }
+        tmp = self.folder / "state.json.tmp"
+        tmp.write_text(json.dumps(state, ensure_ascii=False, default=str), encoding="utf-8")
+        tmp.replace(self.folder / "state.json")
+
+    @classmethod
+    def restore(cls, folder: Path) -> "Job":
+        """Reopen a job saved by an earlier run: re-read the uploads, then put back options, zones and reviews."""
+        st = json.loads((folder / "state.json").read_text(encoding="utf-8"))
+        job = cls(job_id=st["job_id"], folder=folder, created=st.get("created", _now()))
+        job.info = SurveyInfo(**{k: v for k, v in st.get("info", {}).items() if k in {f.name for f in fields(SurveyInfo)}})
+        job.lang, job.reviewer = st.get("lang", "bi"), st.get("reviewer", "")
+        job.comparison = st.get("comparison") or cmp.new_state()
+        job.load(sorted(p for p in job.upload_dir.iterdir() if p.is_file()))
+        saved = {d["line_id"]: d for d in st.get("lines", [])}
+        for ln in job.lines:
+            d = saved.get(ln.line_id)
+            if not d or d.get("source_file") != ln.source_file:
+                continue
+            if d.get("options"):
+                ln.options = parse_options(d["options"])
+                ln.process()
+            ln.zones = [Zone.from_dict(z) for z in d.get("zones", [])]
+            ln.auto_zones = d.get("auto_zones", ln.auto_zones)
+        return job
 
     def export(self, name: str) -> Path:
         """Write report.pdf/.docx/.html, zones.csv or survey.json into the job folder."""
@@ -372,9 +417,168 @@ class Job:
             "reviewer": self.reviewer, "problems": self.problems, "unassigned": self.unassigned,
             "review": review_counts(zones), "draft": any(z.review == "auto" for z in zones),
             "lines": [ln.to_json(self.info.surface_use) for ln in self.lines],
+            "comparison": {**self.comparison_json(), "tolerance": self.comparison["tolerance"],
+                           "features": self.comparison["features"]},
             "choices": {"suspected_type": ZONE_TYPES, "confidence": [c for c in CONFIDENCE_LEVELS if c != "confirmed"],
-                        "action": ACTION_LEVELS, "surface_use": SURFACE_USES},
+                        "action": ACTION_LEVELS, "surface_use": SURFACE_USES, "ref_source": cmp.SOURCES,
+                        "ref_verdict": cmp.REF_VERDICTS, "zone_verdict": cmp.ZONE_VERDICTS,
+                        "meta_fields": cmp.META_FIELDS, "feature_rating": cmp.FEATURE_RATINGS},
         }
+
+    # ------------------------------------------------------------------ comparison with reference software
+    def geom(self, ln: LineState) -> cmp.LineGeom:
+        a = ln.analysis
+        return cmp.LineGeom(n_traces=a.n_traces, dx_m=a.dx_m, time_window_ns=a.n_samples * a.dt_ns,
+                            velocity_m_per_ns=ln.result.velocity_m_per_ns)
+
+    def comparison_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for ln in self.lines:
+            ls = cmp.line_state(self.comparison, ln.line_id)
+            res = cmp.compare_line(ls, [z.to_dict() for z in ln.zones], self.geom(ln), self.comparison["tolerance"])
+            out[ln.line_id] = {"source_file": ln.source_file, "picks": ls["picks"], "images": ls["images"],
+                               "meta": ls["meta"], **res}
+        total = cmp.add_summaries([v["summary"] for v in out.values() if v["picks"]]) if out else None
+        return {"lines": out, "total": total}
+
+    def comparison_rows(self, comp: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        comp = comp or self.comparison_json()
+        return [{"job_id": self.job_id, "project": self.info.project, "line_id": k, "source_file": v["source_file"], **r}
+                for k, v in comp["lines"].items() for r in v["rows"] if v["picks"] or r["verdict_by_user"]]
+
+    def _ref_line(self, line_id: str) -> tuple[LineState, dict[str, Any]]:
+        ln = self.line(line_id)
+        return ln, cmp.line_state(self.comparison, line_id)
+
+    def add_ref_pick(self, line_id: str, d: dict[str, Any]) -> dict[str, Any]:
+        ln, ls = self._ref_line(line_id)
+        p = cmp.clean_pick(d, cmp.next_ref_id(ls["picks"]))
+        ls["picks"].append(p)
+        self._label("reference_pick", ln, None, None, p)
+        return p
+
+    def update_ref_pick(self, line_id: str, ref_id: str, d: dict[str, Any]) -> dict[str, Any]:
+        ln, ls = self._ref_line(line_id)
+        i = next((i for i, p in enumerate(ls["picks"]) if p["ref_id"] == ref_id), None)
+        if i is None:
+            raise KeyError(ref_id)
+        new = cmp.clean_pick({**ls["picks"][i], **d}, ref_id)
+        before, ls["picks"][i] = ls["picks"][i], new
+        self._label("reference_pick_edit", ln, None, before, new)
+        return new
+
+    def delete_ref_pick(self, line_id: str, ref_id: str) -> None:
+        ln, ls = self._ref_line(line_id)
+        p = next((p for p in ls["picks"] if p["ref_id"] == ref_id), None)
+        if p is None:
+            raise KeyError(ref_id)
+        ls["picks"].remove(p)
+        ls["verdicts"].pop(f"ref:{ref_id}", None)
+        self._label("reference_pick_delete", ln, None, p, None)
+
+    def import_ref_csv(self, line_id: str, data: bytes, source: str, replace: bool = False) -> dict[str, Any]:
+        ln, ls = self._ref_line(line_id)
+        raw, warnings = cmp.parse_picks_csv(data, source)
+        if replace:
+            ls["picks"] = [p for p in ls["picks"] if p["source"] != source]
+        added = []
+        for d in raw:
+            p = cmp.clean_pick(d, cmp.next_ref_id(ls["picks"]))
+            ls["picks"].append(p)
+            added.append(p)
+        self._label("reference_import", ln, None, None, {"source": source, "picks": added})
+        return {"added": len(added), "warnings": warnings}
+
+    def set_ref_meta(self, line_id: str, source: str, d: dict[str, Any]) -> None:
+        if source not in cmp.SOURCES:
+            raise ValueError("unknown reference source")
+        _, ls = self._ref_line(line_id)
+        ls["meta"][source] = cmp.clean_meta(d)
+        self.save()
+
+    def set_verdict(self, line_id: str, key: str, verdict: str | None, note: str | None = None) -> None:
+        ln, ls = self._ref_line(line_id)
+        kind, _, ident = key.partition(":")
+        allowed = cmp.REF_VERDICTS if kind == "ref" else cmp.ZONE_VERDICTS if kind == "zone" else None
+        if allowed is None or not ident:
+            raise ValueError("verdict key must be ref:<id> or zone:<id>")
+        if verdict not in (None, "", *allowed):
+            raise ValueError(f"verdict must be one of {', '.join(allowed)}")
+        cur = ls["verdicts"].get(key, {})
+        new = {"verdict": verdict or None, "note": cur.get("note", "") if note is None else str(note)[:500]}
+        if new["verdict"] is None and not new["note"]:
+            ls["verdicts"].pop(key, None)
+        else:
+            ls["verdicts"][key] = new
+        self._label("compare_verdict", ln, ident if kind == "zone" else None, {"key": key, **cur}, {"key": key, **new})
+
+    def add_ref_image(self, line_id: str, source: str, name: str, data: bytes) -> dict[str, Any]:
+        if source not in cmp.SOURCES:
+            raise ValueError("unknown reference source")
+        ext = Path(name).suffix.lower()
+        if ext not in IMAGE_TYPES:
+            raise ValueError("reference images must be PNG, JPG, GIF, BMP or WEBP")
+        _, ls = self._ref_line(line_id)
+        d = self.ref_dir / line_id
+        d.mkdir(parents=True, exist_ok=True)
+        fname = f"{uuid.uuid4().hex[:8]}_{safe_name(name)}"
+        (d / fname).write_bytes(data)
+        img = {"file": fname, "name": safe_name(name), "source": source}
+        ls["images"].append(img)
+        self.save()
+        return img
+
+    def ref_image_path(self, line_id: str, fname: str) -> Path:
+        _, ls = self._ref_line(line_id)
+        if not any(i["file"] == fname for i in ls["images"]):
+            raise KeyError(fname)
+        return self.ref_dir / line_id / fname
+
+    def delete_ref_image(self, line_id: str, fname: str) -> None:
+        p = self.ref_image_path(line_id, fname)
+        _, ls = self._ref_line(line_id)
+        ls["images"] = [i for i in ls["images"] if i["file"] != fname]
+        p.unlink(missing_ok=True)
+        self.save()
+
+    def set_compare_settings(self, d: dict[str, Any]) -> None:
+        if "tolerance" in d:
+            tol = dict(self.comparison["tolerance"])
+            for k in cmp.DEFAULT_TOLERANCE:
+                v = d["tolerance"].get(k)
+                if v not in (None, ""):
+                    if float(v) <= 0:
+                        raise ValueError(f"tolerance {k} must be positive")
+                    tol[k] = float(v)
+            self.comparison["tolerance"] = tol
+        if "features" in d:
+            feats = []
+            for f in d["features"][:100]:
+                if not str(f.get("feature", "")).strip():
+                    continue
+                if f.get("rating") not in cmp.FEATURE_RATINGS or f.get("source") not in cmp.SOURCES:
+                    raise ValueError("feature rows need a known rating and source")
+                feats.append({"feature": str(f["feature"])[:120], "source": f["source"], "rating": f["rating"],
+                              "note": str(f.get("note", ""))[:500]})
+            self.comparison["features"] = feats
+        self.save()
+
+    def export_comparison(self, name: str) -> Path:
+        out = self.folder / "exports"
+        out.mkdir(exist_ok=True)
+        path = out / name
+        if name == "comparison.csv":
+            text = cmp.rows_to_csv(self.comparison_rows(), cmp.COMPARE_COLUMNS)
+        elif name == "comparison_lines.csv":
+            text = cmp.rows_to_csv(line_summary_rows(self.job_id, self.info.project, self.comparison_json()),
+                                   LINE_SUMMARY_COLUMNS)
+        elif name == "features.csv":
+            text = cmp.rows_to_csv([{"job_id": self.job_id, **f} for f in self.comparison["features"]],
+                                   ("job_id", "feature", "source", "rating", "note"))
+        else:
+            raise KeyError(name)
+        path.write_text(text, encoding="utf-8")
+        return path
 
     def set_info(self, d: dict[str, Any]) -> None:
         known = {f.name for f in fields(SurveyInfo)}
@@ -390,6 +594,24 @@ class Job:
         if "reviewer" in d:
             self.reviewer = str(d["reviewer"])[:80]
         self.save()
+
+
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+               ".bmp": "image/bmp", ".webp": "image/webp"}
+LINE_SUMMARY_COLUMNS = ("job_id", "project", "line_id", "source_file", "n_ref", "n_ours", "match", "partial", "missed",
+                        "extra", "extra_real", "extra_false", "unsure", "recall", "precision", "mean_abs_dx_m",
+                        "mean_abs_ddepth_m", "meta_checked", "meta_mismatch")
+
+
+def line_summary_rows(job_id: str, project: str, comp: dict[str, Any]) -> list[dict[str, Any]]:
+    """One row per line: the counts, plus how many reference line facts disagree with ours."""
+    rows = []
+    for k, v in comp["lines"].items():
+        if not v["picks"] and not v["meta_check"]:
+            continue
+        rows.append({"job_id": job_id, "project": project, "line_id": k, "source_file": v["source_file"], **v["summary"],
+                     "meta_checked": len(v["meta_check"]), "meta_mismatch": sum(m["ok"] is False for m in v["meta_check"])})
+    return rows
 
 
 def _companion(p: Path) -> dict[str, Any]:
@@ -445,4 +667,40 @@ class JobStore:
         return job
 
     def get(self, job_id: str) -> Job:
+        if job_id not in self.jobs:
+            folder = self.root / job_id
+            if "/" in job_id or "\\" in job_id or job_id.startswith(".") or not (folder / "state.json").is_file():
+                raise KeyError(job_id)
+            self.jobs[job_id] = Job.restore(folder)
         return self.jobs[job_id]
+
+    def states(self) -> list[dict[str, Any]]:
+        """Saved state of every job in the work folder, newest first (read from disk, nothing reprocessed)."""
+        out = []
+        for f in sorted(self.root.glob("*/state.json"), reverse=True):
+            try:
+                out.append(json.loads(f.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
+        return out
+
+    def summaries(self) -> list[dict[str, Any]]:
+        return [{"job_id": s["job_id"], "created": s.get("created"), "saved": s.get("saved"),
+                 "project": s.get("info", {}).get("project", ""), "site": s.get("info", {}).get("site", ""),
+                 **s.get("summary", {})} for s in self.states()]
+
+    def export_all(self, name: str) -> str:
+        """Comparison of every saved job in one sheet, for many real lines tested over several sessions."""
+        states = self.states()
+        if name == "comparison_all.csv":
+            return cmp.rows_to_csv([r for s in states for r in s.get("compare_rows", [])], cmp.COMPARE_COLUMNS)
+        if name == "comparison_lines_all.csv":
+            rows = [{"job_id": s["job_id"], "project": s.get("info", {}).get("project", ""), **ln, **ln["summary"],
+                     "meta_checked": len(ln["meta_check"]), "meta_mismatch": sum(m["ok"] is False for m in ln["meta_check"])}
+                    for s in states for ln in s.get("compare_lines", []) if ln["summary"]["n_ref"] or ln["meta_check"]]
+            return cmp.rows_to_csv(rows, LINE_SUMMARY_COLUMNS)
+        if name == "features_all.csv":
+            rows = [{"job_id": s["job_id"], **f} for s in states for f in s.get("comparison", {}).get("features", [])
+                    if f.get("rating") != "untested" or f.get("note")]
+            return cmp.rows_to_csv(rows, ("job_id", "feature", "source", "rating", "note"))
+        raise KeyError(name)

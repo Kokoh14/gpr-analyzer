@@ -16,6 +16,11 @@ and produce a report.
 | `gpr_analyzer/cli.py` | `gpr-analyzer analyze <files> --report out.pdf` |
 | `gpr_analyzer/synthetic/` | Synthetic radargrams for tests |
 
+## Windows (no programming tools needed)
+
+Download the ZIP, unpack it, double-click `START-GPR-ANALYZER.bat`. Thai guide for testing with real files and
+comparing against SubScan / GeoLitix: [`docs/windows-testing.md`](docs/windows-testing.md).
+
 ## Development
 
 ```bash

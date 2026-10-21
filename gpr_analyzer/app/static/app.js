@@ -23,6 +23,13 @@ const VIEWS = [
 const FAMILY = { iprh: "header", iprb: "data", rad: "header", rd3: "data", rd7: "data", hd: "header", dt1: "data", dzt: "data", sgy: "data", segy: "data" };
 const COMPANION = ["txt", "cor", "gps", "csv", "xml", "ini", "json", "log", "tmf", "mrk"];
 
+const REF_DRAW = "__ref__";  // S.drawFor value while drawing a reference pick
+const VERDICT = { match: "ตรงกัน", partial: "ตรงบางส่วน", missed: "เราไม่พบ", unsure: "ไม่แน่ใจ",
+  extra: "เราพบเกิน (ยังไม่ตัดสิน)", extra_real: "เราพบเพิ่ม น่าจะจริง", extra_false: "เราพบเกิน ผิด" };
+const RATING = { better: "ดีกว่า", same: "พอ ๆ กัน", worse: "แย่กว่า", missing: "ยังไม่มี", untested: "ยังไม่ได้ลอง" };
+const META = { n_traces: "จำนวน trace", time_window_ns: "Time window (ns)", length_m: "ความยาวเส้น (m)",
+  velocity_m_per_ns: "ความเร็วคลื่น (m/ns)", max_depth_m: "ความลึกสูงสุด (m)" };
+
 const S = { files: [], job: null, line: null, sel: null, editing: null, drawFor: null };
 
 function toast(msg) {
@@ -84,6 +91,24 @@ async function runDemo() {
   try { S.job = await post("/api/demo", {}); openReview(); } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
 }
 
+async function loadPastJobs() {
+  let jobs = [];
+  try { jobs = await api("/api/jobs"); } catch (e) { return; }
+  $("#pastJobs").hidden = !jobs.length;
+  $("#pastJobs tbody").innerHTML = jobs.map((j) => {
+    const r = j.review || {}, n = (r.auto || 0) + (r.accepted || 0) + (r.edited || 0) + (r.rejected || 0), c = j.compare;
+    const cmp = c && c.n_ref ? `อ้างอิง ${c.n_ref} จุด · ตรง ${c.match + c.partial} · เราไม่พบ ${c.missed} · เราพบเกิน ${c.extra}` : `<span class="muted">ยังไม่ได้เทียบ</span>`;
+    return `<tr><td><b>${esc(j.project || "งานสำรวจ")}</b><br><span class="small muted">${esc(j.job_id)}</span></td>
+      <td class="small">${(j.files || []).map(esc).join("<br>")}</td><td>${n - (r.auto || 0)}/${n}</td><td class="small">${cmp}</td>
+      <td><a class="btn" href="#${esc(j.job_id)}" data-open="${esc(j.job_id)}">เปิด</a></td></tr>`;
+  }).join("");
+}
+async function openJob(id) {
+  busy(true, "กำลังเปิดงานและประมวลผลไฟล์อีกครั้ง…");
+  try { S.job = await api(`/api/jobs/${id}`); openReview(); } catch (e) { toast("เปิดงานไม่ได้: " + e.message); history.replaceState(null, "", "/"); }
+  finally { busy(false); }
+}
+
 // ------------------------------------------------------------------ review
 function openReview() {
   $("#uploadView").hidden = true; $("#reviewView").hidden = false; $("#exports").hidden = false;
@@ -141,6 +166,7 @@ function renderLine() {
     </div>`).join("");
   renderRecipe(l);
   renderCards(l);
+  renderCompare(l);
 }
 function nice(span, n) {
   const raw = span / n, p = 10 ** Math.floor(Math.log10(raw)), m = raw / p;
@@ -174,6 +200,15 @@ function overlay(l) {
       style="--c:var(${c});left:${(z.trace_start / N) * 100}%;width:${((z.trace_end - z.trace_start + 1) / N) * 100}%;
       top:${(z.time_top_ns / T) * 100}%;height:${Math.max(((z.time_bottom_ns - z.time_top_ns) / T) * 100, 0.8)}%">
       <span class="lbl">${z.zone_id}</span></div>`;
+  }
+  const c = S.job.comparison?.lines[l.line_id];
+  if (c && $("#showRef").checked) for (const r of c.rows) {
+    if (r.kind === "ours_only") continue;
+    const left = Math.max(r.ref_trace_start / N, 0) * 100, right = Math.min((r.ref_trace_end + 1) / N, 1) * 100;
+    const top = Math.max(r.ref_time_top_ns / T, 0) * 100, bot = Math.min(r.ref_time_bottom_ns / T, 1) * 100;
+    if (right <= left || bot <= top) continue;
+    h += `<div class="rbox" title="อ้างอิง ${esc(r.ref_id)} ${esc(r.label)} (${esc(S.job.choices.ref_source[r.source])})"
+      style="left:${left}%;width:${right - left}%;top:${top}%;height:${Math.max(bot - top, 0.8)}%"><span class="lbl">${esc(r.ref_id)}</span></div>`;
   }
   return h;
 }
@@ -253,6 +288,72 @@ function renderRecipe(l) {
   $("#csvLink").href = `/api/jobs/${S.job.job_id}/lines/${l.line_id}/export/csv`;
 }
 
+// ------------------------------------------------------------------ comparison with reference software
+const jobUrl = (p) => `/api/jobs/${S.job.job_id}${p}`;
+const lineUrl = (p) => jobUrl(`/lines/${S.line}${p}`);
+function pct(v) { return v == null ? "–" : Math.round(v * 100) + "%"; }
+function renderCompare(l) {
+  const ch = S.job.choices, c = S.job.comparison.lines[l.line_id];
+  const src = $("#refSource"), cur = src.value || "subscan";
+  src.innerHTML = opts(Object.keys(ch.ref_source), cur, ch.ref_source);
+  const s = c.summary;
+  $("#cmpNote").textContent = c.picks.length ? `(${c.picks.length} จุดอ้างอิง)` : "(ยังไม่มีข้อมูลอ้างอิง)";
+  $("#cmpSummary").innerHTML = c.picks.length ? `
+    <span class="chip">อ้างอิง <b>${s.n_ref}</b> จุด</span><span class="chip">ตรงกัน <b>${s.match}</b></span>
+    <span class="chip">ตรงบางส่วน <b>${s.partial}</b></span><span class="chip">เราไม่พบ <b>${s.missed}</b></span>
+    <span class="chip">เราพบเกิน <b>${s.extra}</b> (จริง ${s.extra_real} · ผิด ${s.extra_false})</span>
+    <span class="chip" title="สัดส่วนจุดอ้างอิงที่เราพบ">พบครบ <b>${pct(s.recall)}</b></span>
+    <span class="chip" title="โซนที่ยังไม่ตัดสินนับเป็นผิดไว้ก่อน">แม่นยำ <b>${pct(s.precision)}</b></span>
+    <span class="chip">ระยะต่างเฉลี่ย <b>${fmt(s.mean_abs_dx_m)}</b> m</span><span class="chip">ลึกต่างเฉลี่ย <b>${fmt(s.mean_abs_ddepth_m)}</b> m</span>` : "";
+  $("#refImages").innerHTML = c.images.map((im) => `<div class="ref-img"><div class="cap"><span>${esc(ch.ref_source[im.source])} · ${esc(im.name)}</span>
+      <span><a href="${lineUrl(`/ref/images/${encodeURIComponent(im.file)}`)}" target="_blank">เปิดเต็ม</a> ·
+      <a href="#" data-delimg="${esc(im.file)}">ลบ</a></span></div>
+      <img loading="lazy" src="${lineUrl(`/ref/images/${encodeURIComponent(im.file)}`)}" alt="${esc(im.name)}"></div>`).join("");
+  const zoneOpts = (r) => `<select data-pair="${esc(r.ref_id)}" title="จับคู่เอง"><option value="">อัตโนมัติ</option><option value="none" ${r.forced && !r.zone_id ? "selected" : ""}>ไม่มีโซนตรงกัน</option>
+      ${l.zones.map((z) => `<option value="${z.zone_id}" ${r.forced && r.zone_id === z.zone_id ? "selected" : ""}>${z.zone_id} ${esc((TYPE[z.suspected_type] || TYPE.unknown)[0])}</option>`).join("")}</select>`;
+  $("#cmpRows").innerHTML = c.rows.map((r) => {
+    const isRef = r.kind !== "ours_only", key = isRef ? `ref:${r.ref_id}` : `zone:${r.zone_id}`;
+    const choices = isRef ? ch.ref_verdict : ch.zone_verdict;
+    const where = isRef ? `${r.ref_x_start_m != null ? `${fmt(r.ref_x_start_m)}–${fmt(r.ref_x_end_m)} m` : `trace ${r.ref_trace_start}–${r.ref_trace_end}`}<br>ลึก ${fmt(r.ref_depth_top_m)}–${fmt(r.ref_depth_bottom_m)} m` : "";
+    const diff = r.kind === "pair" ? `${r.dx_center_m != null ? fmt(r.dx_center_m) + " m" : r.dx_center_traces + " tr"} / ${fmt(r.ddepth_top_m)} m` : "";
+    return `<tr class="v-${r.verdict}">
+      <td>${isRef ? `<span class="refid">${esc(r.ref_id)}</span> ${esc(r.label)}<br><span class="small muted">${esc(ch.ref_source[r.source])}${r.ref_type ? " · " + esc(r.ref_type) : ""}</span>` : `<span class="muted">–</span>`}</td>
+      <td class="small">${where}</td>
+      <td>${r.zone_id ? `<a href="#" data-gozone="${esc(r.zone_id)}">${esc(r.zone_id)}</a> <span class="small muted">${esc((TYPE[r.our_type] || TYPE.unknown)[0])}</span>` : `<span class="muted">ไม่มี</span>`}
+        ${isRef ? "<br>" + zoneOpts(r) : ""}</td>
+      <td class="small">${diff}</td>
+      <td class="small">${VERDICT[r.auto] || r.auto}</td>
+      <td><select data-verdict="${esc(key)}"><option value="">ตามผลจับคู่</option>${opts(choices, r.verdict_by_user ? r.verdict : "", VERDICT)}</select></td>
+      <td><input data-vnote="${esc(key)}" value="${esc(r.note)}" placeholder="หมายเหตุ"></td>
+      <td>${isRef ? `<button class="btn ghost" data-delpick="${esc(r.ref_id)}" title="ลบจุดอ้างอิง">✗</button>` : ""}</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="muted">ยังไม่มีจุดอ้างอิงสำหรับเส้นนี้</td></tr>`;
+  const meta = c.meta[cur] || {}, mf = $("#metaForm");
+  for (const el of mf.elements) if (el.name) el.value = meta[el.name] ?? "";
+  $("#metaRows").innerHTML = c.meta_check.map((m) => `<tr><td>${esc(ch.ref_source[m.source])}</td><td>${META[m.field] || m.field}</td>
+      <td>อ้างอิง ${m.ref}</td><td>เรา ${m.ours ?? "–"}</td><td class="${m.ok ? "ok-y" : m.ok === false ? "ok-n" : ""}">${m.ok ? "✓ ตรง" : m.ok === false ? "✗ ไม่ตรง" : "?"}</td></tr>`).join("");
+  const tol = S.job.comparison.tolerance, tf = $("#tolForm");
+  for (const el of tf.elements) if (el.name) el.value = tol[el.name];
+  renderFeatures();
+}
+function renderFeatures() {
+  const ch = S.job.choices;
+  $("#featRows").innerHTML = S.job.comparison.features.map((f, i) => `<tr data-feat="${i}">
+    <td><input name="feature" value="${esc(f.feature)}"></td>
+    <td><select name="source">${opts(Object.keys(ch.ref_source), f.source, ch.ref_source)}</select></td>
+    <td><select name="rating">${opts(ch.feature_rating, f.rating, RATING)}</select></td>
+    <td><input name="note" value="${esc(f.note)}"></td>
+    <td><button class="btn ghost" data-delfeat="${i}">✗</button></td></tr>`).join("");
+}
+function featureValues() {
+  return $$("#featRows tr").map((tr) => Object.fromEntries($$("input,select", tr).map((el) => [el.name, el.value])));
+}
+async function upload(url, files, fields) {
+  const fd = new FormData();
+  for (const f of files) fd.append(fields.fileField || "files", f, f.name);
+  for (const [k, v] of Object.entries(fields)) if (k !== "fileField") fd.append(k, v);
+  return api(url, { method: "POST", body: fd });
+}
+
 function buildInfoForm() {
   const src = $("#infoForm"), dst = $("#infoForm2");
   dst.innerHTML = src.innerHTML + `<button class="btn" type="submit">บันทึกข้อมูลงาน</button>`;
@@ -279,7 +380,7 @@ function review(zid, action, changes, note) {
 }
 function startDraw(forZone) {
   S.drawFor = forZone; document.body.classList.add("drawing");
-  toast(forZone ? `ลากกรอบใหม่ของโซน ${forZone} บนภาพใดก็ได้` : "ลากกรอบบนภาพเพื่อเพิ่มโซน (Esc เพื่อยกเลิก)");
+  toast(forZone === REF_DRAW ? "ลากกรอบบนภาพตรงตำแหน่งที่ซอฟต์แวร์อ้างอิงมาร์กไว้ (Esc เพื่อยกเลิก)" : forZone ? `ลากกรอบใหม่ของโซน ${forZone} บนภาพใดก็ได้` : "ลากกรอบบนภาพเพื่อเพิ่มโซน (Esc เพื่อยกเลิก)");
 }
 function stopDraw() { S.drawFor = null; document.body.classList.remove("drawing"); $$(".drawbox").forEach((d) => d.remove()); }
 
@@ -316,7 +417,10 @@ document.addEventListener("mouseup", async () => {
   if (!b || Math.abs(b.trace - a.trace) < 2) { toast("กรอบเล็กเกินไป"); return; }
   const vals = { trace_start: Math.min(a.trace, b.trace), trace_end: Math.max(a.trace, b.trace),
     time_top_ns: +Math.min(a.t, b.t).toFixed(2), time_bottom_ns: +Math.max(a.t, b.t).toFixed(2) };
-  if (target === "") {
+  if (target === REF_DRAW) {
+    await update(post(lineUrl("/ref/picks"), { source: $("#refSource").value, x_unit: "trace", y_unit: "ns",
+      x_start: vals.trace_start, x_end: vals.trace_end, top: vals.time_top_ns, bottom: vals.time_bottom_ns }), "เพิ่มจุดอ้างอิงแล้ว");
+  } else if (target === "") {
     await update(post(`/api/jobs/${S.job.job_id}/lines/${S.line}/zones`, vals), "เพิ่มโซนแล้ว เลือกประเภทในการ์ดได้");
   } else {
     S.editing = target;
@@ -343,8 +447,31 @@ document.addEventListener("click", (e) => {
   const crd = t.closest("[data-card]"); if (crd && !t.closest("form")) select(crd.dataset.card, false);
   if (t.closest("[data-cancel]")) { S.editing = null; renderCards(line()); }
   const rd = t.closest("[data-redraw]"); if (rd) startDraw(rd.dataset.redraw);
+  const op = t.closest("[data-open]"); if (op) { e.preventDefault(); openJob(op.dataset.open); return; }
+  const gz = t.closest("[data-gozone]"); if (gz) { e.preventDefault(); select(gz.dataset.gozone); return; }
+  const dp = t.closest("[data-delpick]");
+  if (dp) { if (confirm(`ลบจุดอ้างอิง ${dp.dataset.delpick}?`)) update(api(lineUrl(`/ref/picks/${dp.dataset.delpick}`), { method: "DELETE" }), "ลบจุดอ้างอิงแล้ว"); return; }
+  const di = t.closest("[data-delimg]");
+  if (di) { e.preventDefault(); if (confirm("ลบภาพอ้างอิงนี้?")) update(api(lineUrl(`/ref/images/${encodeURIComponent(di.dataset.delimg)}`), { method: "DELETE" }), "ลบภาพแล้ว"); return; }
+  const df = t.closest("[data-delfeat]"); if (df) { const fs = featureValues(); fs.splice(+df.dataset.delfeat, 1); S.job.comparison.features = fs; renderFeatures(); }
+});
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.dataset.verdict) update(post(lineUrl("/ref/verdict"), { key: t.dataset.verdict, verdict: t.value || null }), "บันทึกคำตัดสินแล้ว");
+  else if (t.dataset.vnote) update(post(lineUrl("/ref/verdict"), { key: t.dataset.vnote, note: t.value }), "บันทึกหมายเหตุแล้ว");
+  else if (t.dataset.pair) update(api(lineUrl(`/ref/picks/${t.dataset.pair}`), { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ match_zone: t.value || null }) }), "จับคู่ใหม่แล้ว");
 });
 document.addEventListener("submit", (e) => {
+  const id = e.target.id;
+  if (id === "pickForm" || id === "metaForm" || id === "tolForm") {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target));
+    if (id === "pickForm") update(post(lineUrl("/ref/picks"), { ...d, source: $("#refSource").value }), "เพิ่มจุดอ้างอิงแล้ว").then(() => e.target.reset());
+    else if (id === "metaForm") update(post(lineUrl(`/ref/meta/${$("#refSource").value}`), d), "บันทึกค่าจากซอฟต์แวร์อ้างอิงแล้ว");
+    else update(post(jobUrl("/compare/settings"), { tolerance: d }), "ใช้เกณฑ์จับคู่ใหม่แล้ว");
+    return;
+  }
   const f = e.target.closest("[data-editform]");
   if (f) {
     e.preventDefault();
@@ -380,6 +507,27 @@ $("#newJob").addEventListener("click", () => { if (confirm("เริ่มง�
 $("#drawBtn").addEventListener("click", () => startDraw(""));
 $("#showArtifacts").addEventListener("change", refreshOverlays);
 $("#showRejected").addEventListener("change", refreshOverlays);
+$("#showRef").addEventListener("change", refreshOverlays);
+$("#refSource").addEventListener("change", () => renderCompare(line()));
+$("#refDrawBtn").addEventListener("click", () => startDraw(REF_DRAW));
+$("#refImgBtn").addEventListener("click", () => $("#refImgInput").click());
+$("#refCsvBtn").addEventListener("click", () => $("#refCsvInput").click());
+$("#refImgInput").addEventListener("change", async (e) => {
+  const files = [...e.target.files]; e.target.value = "";
+  if (files.length) await update(upload(lineUrl("/ref/images"), files, { source: $("#refSource").value }), `แนบภาพ ${files.length} ภาพแล้ว`);
+});
+$("#refCsvInput").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  try {
+    const j = await upload(lineUrl("/ref/import"), [f], { fileField: "file", source: $("#refSource").value, replace: $("#refReplace").checked });
+    S.job = j; render();
+    const r = j.import_result;
+    toast(`นำเข้า ${r.added} จุด` + (r.warnings.length ? ` (ข้าม ${r.warnings.length} แถว)` : ""));
+  } catch (err) { toast("นำเข้าไม่ได้: " + err.message); }
+});
+$("#featAdd").addEventListener("click", () => { S.job.comparison.features = [...featureValues(), { feature: "", source: $("#refSource").value || "subscan", rating: "untested", note: "" }]; renderFeatures(); });
+$("#featSave").addEventListener("click", () => update(post(jobUrl("/compare/settings"), { features: featureValues() }), "บันทึกคะแนนฟีเจอร์แล้ว"));
 $("#zoneFilter").addEventListener("change", () => renderCards(line()));
 $("#infoForm2").addEventListener("submit", (e) => { e.preventDefault(); update(post(`/api/jobs/${S.job.job_id}/info`, infoValues(e.target)), "บันทึกข้อมูลงานแล้ว"); });
 
@@ -407,6 +555,6 @@ $("#autoBtn").addEventListener("click", () => reprocess({}));
 
 (async function boot() {
   const id = location.hash.slice(1);
-  if (!id) return;
-  try { S.job = await api(`/api/jobs/${id}`); openReview(); } catch (e) { history.replaceState(null, "", "/"); }
+  if (id) await openJob(id);
+  else loadPastJobs();
 })();

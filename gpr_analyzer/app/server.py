@@ -9,12 +9,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from gpr_analyzer.app.files import safe_name
-from gpr_analyzer.app.jobs import VIEWS, Job, JobStore
+from gpr_analyzer.app.compare import TEMPLATE_CSV
+from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
 
 STATIC = Path(__file__).parent / "static"
 MEDIA = {".pdf": "application/pdf", ".html": "text/html; charset=utf-8", ".csv": "text/csv; charset=utf-8",
@@ -45,6 +46,10 @@ def create_app(workdir: Path) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return (STATIC / "index.html").read_text(encoding="utf-8")
+
+    @app.get("/api/jobs")
+    def list_jobs() -> list[dict]:
+        return store.summaries()
 
     @app.post("/api/jobs")
     def create_job(files: list[UploadFile] = File(...)) -> dict:
@@ -117,11 +122,78 @@ def create_app(workdir: Path) -> FastAPI:
             guarded(j.reprocess, line_id, body.get("options", {}))
         return j.to_json()
 
+    # ---------------------------------------------------------- comparison with reference software
+    def ref_route(job_id: str, fn, *a: Any) -> dict:
+        j = job(job_id)
+        with j.lock:
+            extra = guarded(fn, j, *a)
+        out = j.to_json()
+        if isinstance(extra, dict) and "added" in extra:
+            out["import_result"] = extra
+        return out
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/ref/picks")
+    def add_pick(job_id: str, line_id: str, body: dict = Body(...)) -> dict:
+        return ref_route(job_id, Job.add_ref_pick, line_id, body)
+
+    @app.put("/api/jobs/{job_id}/lines/{line_id}/ref/picks/{ref_id}")
+    def edit_pick(job_id: str, line_id: str, ref_id: str, body: dict = Body(...)) -> dict:
+        return ref_route(job_id, Job.update_ref_pick, line_id, ref_id, body)
+
+    @app.delete("/api/jobs/{job_id}/lines/{line_id}/ref/picks/{ref_id}")
+    def delete_pick(job_id: str, line_id: str, ref_id: str) -> dict:
+        return ref_route(job_id, Job.delete_ref_pick, line_id, ref_id)
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/ref/import")
+    def import_picks(job_id: str, line_id: str, file: UploadFile = File(...), source: str = Form("other"),
+                     replace: bool = Form(False)) -> dict:
+        return ref_route(job_id, Job.import_ref_csv, line_id, file.file.read(), source, replace)
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/ref/meta/{source}")
+    def ref_meta(job_id: str, line_id: str, source: str, body: dict = Body(...)) -> dict:
+        return ref_route(job_id, Job.set_ref_meta, line_id, source, body)
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/ref/verdict")
+    def verdict(job_id: str, line_id: str, body: dict = Body(...)) -> dict:
+        return ref_route(job_id, Job.set_verdict, line_id, str(body.get("key", "")), body.get("verdict"),
+                         body.get("note"))
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/ref/images")
+    def add_image(job_id: str, line_id: str, files: list[UploadFile] = File(...), source: str = Form("other")) -> dict:
+        j = job(job_id)
+        with j.lock:
+            for f in files:
+                guarded(j.add_ref_image, line_id, source, f.filename or "image.png", f.file.read())
+        return j.to_json()
+
+    @app.get("/api/jobs/{job_id}/lines/{line_id}/ref/images/{fname}")
+    def get_image(job_id: str, line_id: str, fname: str) -> FileResponse:
+        p = guarded(job(job_id).ref_image_path, line_id, fname)
+        return FileResponse(p, media_type=IMAGE_TYPES.get(p.suffix.lower(), "application/octet-stream"))
+
+    @app.delete("/api/jobs/{job_id}/lines/{line_id}/ref/images/{fname}")
+    def delete_image(job_id: str, line_id: str, fname: str) -> dict:
+        return ref_route(job_id, Job.delete_ref_image, line_id, fname)
+
+    @app.post("/api/jobs/{job_id}/compare/settings")
+    def compare_settings(job_id: str, body: dict = Body(...)) -> dict:
+        return ref_route(job_id, Job.set_compare_settings, body)
+
+    @app.get("/api/compare/template.csv")
+    def template() -> Response:
+        return Response("\ufeff" + TEMPLATE_CSV, media_type=MEDIA[".csv"],
+                        headers={"Content-Disposition": 'attachment; filename="reference_picks_template.csv"'})
+
+    @app.get("/api/compare/export/{name}")
+    def export_all(name: str) -> Response:
+        text = guarded(store.export_all, name)
+        return Response(text, media_type=MEDIA[".csv"], headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
     @app.get("/api/jobs/{job_id}/export/{name}")
     def export(job_id: str, name: str) -> FileResponse:
         j = job(job_id)
         with j.lock:
-            path = guarded(j.export, name)
+            path = guarded(j.export_comparison if name.startswith(("comparison", "features")) else j.export, name)
         return FileResponse(path, media_type=MEDIA[path.suffix], filename=f"{j.job_id}_{path.name}")
 
     @app.get("/api/jobs/{job_id}/lines/{line_id}/export/{fmt}")

@@ -18,6 +18,7 @@
     <a class="btn ghost" data-export="zones.csv" title="ตารางโซน (Excel อ่านภาษาไทยได้)">CSV โซน</a>
     <a class="btn ghost" data-export="survey.json">JSON</a>
     <a class="btn ghost" id="labelsLink" title="บันทึกการตรวจทานทุกครั้ง สำหรับสอบเทียบภายหลัง">labels</a>
+    <a class="btn ghost" data-export="comparison.csv" title="ผลเทียบกับซอฟต์แวร์อ้างอิง ทีละจุด (เปิดด้วย Excel)">เทียบผล CSV</a>
     <button class="btn ghost" id="newJob" title="เริ่มงานใหม่">งานใหม่</button>
   </div>
 </header>
@@ -61,6 +62,17 @@
     <button class="btn big ghost" id="demoBtn">ลองด้วยข้อมูลสังเคราะห์</button>
   </div>
   <p class="muted center">ไฟล์ทั้งหมดอยู่ในเครื่องนี้เท่านั้น โปรแกรมเลือกฟิลเตอร์ให้อัตโนมัติ และปรับเองได้ในหน้าตรวจทาน</p>
+
+  <section class="card" id="pastJobs" hidden>
+    <h3>งานก่อนหน้า <span class="muted">(เก็บไว้ในเครื่อง เปิดต่อได้)</span></h3>
+    <table class="jobs"><thead><tr><th>งาน</th><th>ไฟล์</th><th>ตรวจแล้ว</th><th>เทียบกับซอฟต์แวร์อ้างอิง</th><th></th></tr></thead><tbody></tbody></table>
+    <div class="actions left">
+      <span class="muted small">สรุปการเทียบผลของทุกงาน:</span>
+      <a class="btn ghost" href="/api/compare/export/comparison_lines_all.csv">รายเส้น CSV</a>
+      <a class="btn ghost" href="/api/compare/export/comparison_all.csv">รายจุด CSV</a>
+      <a class="btn ghost" href="/api/compare/export/features_all.csv">คะแนนฟีเจอร์ CSV</a>
+    </div>
+  </section>
 </main>
 
 <!-- ======================= busy ======================= -->
@@ -87,11 +99,72 @@
       <div class="tools">
         <label class="toggle"><input type="checkbox" id="showArtifacts" checked> แสดง artifact</label>
         <label class="toggle"><input type="checkbox" id="showRejected" checked> แสดงโซนที่ปฏิเสธ</label>
+        <label class="toggle"><input type="checkbox" id="showRef" checked> แสดงจุดอ้างอิง</label>
         <button class="btn" id="drawBtn" title="ลากกรอบบนภาพใดก็ได้เพื่อเพิ่มโซนที่โปรแกรมไม่ได้วง">＋ วาดโซนใหม่</button>
       </div>
     </div>
     <div class="readout" id="readout">ชี้บนภาพเพื่อดูตำแหน่ง</div>
     <div id="panes"></div>
+
+    <details class="compare card" id="compare" open>
+      <summary>เทียบกับซอฟต์แวร์อ้างอิง (SubScan / GeoLitix) <span class="muted" id="cmpNote"></span></summary>
+      <p class="muted small">ใช้ผลจากซอฟต์แวร์ลิขสิทธิ์เป็นคำตอบอ้างอิงเท่านั้น: แนบภาพหน้าจอหรือภาพที่ส่งออก นำเข้าตารางจุดที่มาร์กไว้ (CSV)
+        หรือวาดกรอบบนภาพของเราตรงตำแหน่งที่ซอฟต์แวร์นั้นมาร์ก แล้วโปรแกรมจะจับคู่กับโซนของเราให้ ตัดสินเองได้ทุกแถว</p>
+      <div class="cmp-bar">
+        <label>ซอฟต์แวร์อ้างอิง <select id="refSource"></select></label>
+        <button class="btn" id="refImgBtn">แนบภาพ</button>
+        <button class="btn" id="refCsvBtn">นำเข้า CSV จุดที่มาร์ก</button>
+        <label class="toggle small"><input type="checkbox" id="refReplace"> แทนที่จุดเดิมของซอฟต์แวร์นี้</label>
+        <a class="btn ghost small" href="/api/compare/template.csv">แม่แบบ CSV</a>
+        <button class="btn" id="refDrawBtn" title="ลากกรอบบนภาพของเราตรงที่ซอฟต์แวร์อ้างอิงมาร์กไว้">＋ วาดจุดอ้างอิง</button>
+        <input type="file" id="refImgInput" accept="image/*" multiple hidden>
+        <input type="file" id="refCsvInput" accept=".csv,.txt,.tsv" hidden>
+      </div>
+      <div id="cmpSummary" class="cmp-summary"></div>
+      <div id="refImages" class="ref-images"></div>
+      <table class="cmp"><thead><tr><th>อ้างอิง</th><th>ตำแหน่งอ้างอิง</th><th>โซนเรา</th><th>ต่าง (ระยะ / ลึกบน)</th><th>ผลจับคู่</th><th>ผู้ตรวจตัดสิน</th><th>หมายเหตุ</th><th></th></tr></thead>
+        <tbody id="cmpRows"></tbody></table>
+      <form id="pickForm" class="pick-form">
+        <b class="small">เพิ่มจุดอ้างอิงด้วยตัวเลข</b>
+        <label>ระยะเริ่ม (m)<input name="x_start" type="number" step="0.01" required></label>
+        <label>ระยะจบ (m)<input name="x_end" type="number" step="0.01" placeholder="เว้นว่าง = จุด"></label>
+        <label>ลึกบน (m)<input name="top" type="number" step="0.01" required></label>
+        <label>ลึกล่าง (m)<input name="bottom" type="number" step="0.01" placeholder="เว้นว่าง = จุด"></label>
+        <label>ชื่อ<input name="label"></label>
+        <label>ประเภทตามซอฟต์แวร์นั้น<input name="ref_type" placeholder="เช่น void, pipe"></label>
+        <button class="btn primary" type="submit">เพิ่ม</button>
+      </form>
+      <details class="meta-check">
+        <summary>ตรวจการอ่านไฟล์: ค่าที่ซอฟต์แวร์อ้างอิงแสดงสำหรับเส้นนี้</summary>
+        <form id="metaForm" class="grid-form">
+          <label>จำนวน trace<input name="n_traces" type="number" step="1"></label>
+          <label>Time window (ns)<input name="time_window_ns" type="number" step="0.1"></label>
+          <label>ความยาวเส้น (m)<input name="length_m" type="number" step="0.01"></label>
+          <label>ความเร็วคลื่นที่ใช้ (m/ns)<input name="velocity_m_per_ns" type="number" step="0.001"></label>
+          <label>ความลึกสูงสุด (m)<input name="max_depth_m" type="number" step="0.01"></label>
+          <label>หมายเหตุ<input name="note"></label>
+          <button class="btn" type="submit">บันทึก</button>
+        </form>
+        <table class="cmp small"><tbody id="metaRows"></tbody></table>
+        <p class="muted small">ความเร็วคลื่นที่กรอกจะใช้แปลงความลึกของจุดอ้างอิงจากซอฟต์แวร์นั้นเป็นเวลา ก่อนจับคู่</p>
+      </details>
+      <details>
+        <summary class="small">เกณฑ์จับคู่</summary>
+        <form id="tolForm" class="grid-form">
+          <label>ห่างกันในแนวระยะได้ไม่เกิน (m)<input name="x_m" type="number" step="0.1" min="0.1"></label>
+          <label>ห่างกันในแนวลึกได้ไม่เกิน (m)<input name="depth_m" type="number" step="0.05" min="0.05"></label>
+          <label>ถ้าไม่ทราบระยะ trace: ไม่เกิน (trace)<input name="traces" type="number" step="1" min="1"></label>
+          <button class="btn" type="submit">ใช้เกณฑ์นี้</button>
+        </form>
+      </details>
+    </details>
+
+    <details class="card" id="features">
+      <summary>ให้คะแนนฟีเจอร์เทียบกับซอฟต์แวร์ลิขสิทธิ์ <span class="muted small">(ทั้งงาน)</span></summary>
+      <table class="cmp"><thead><tr><th>ฟีเจอร์</th><th>เทียบกับ</th><th>โปรแกรมนี้</th><th>หมายเหตุ</th><th></th></tr></thead><tbody id="featRows"></tbody></table>
+      <div class="actions left"><button class="btn ghost" id="featAdd">＋ เพิ่มแถว</button><button class="btn primary" id="featSave">บันทึกคะแนน</button>
+        <a class="btn ghost" data-export="features.csv">ส่งออก CSV</a></div>
+    </details>
 
     <details class="recipe card" id="recipe">
       <summary>ขั้นตอนประมวลผลและพารามิเตอร์ <span class="muted" id="recipeNote"></span></summary>
