@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPR Analyzer</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">GPR Analyzer <span class="sub">วิเคราะห์ข้อมูลเรดาร์ตรวจใต้ดิน</span></div>
+  <div class="job-meta" id="jobMeta"></div>
+  <div class="exports" id="exports" hidden>
+    <span class="exp-label">ส่งออก</span>
+    <a class="btn" data-export="report.pdf">PDF</a>
+    <a class="btn" data-export="report.docx">Word</a>
+    <a class="btn" data-export="report.html">HTML</a>
+    <a class="btn ghost" data-export="zones.csv" title="ตารางโซน (Excel อ่านภาษาไทยได้)">CSV โซน</a>
+    <a class="btn ghost" data-export="survey.json">JSON</a>
+    <a class="btn ghost" id="labelsLink" title="บันทึกการตรวจทานทุกครั้ง สำหรับสอบเทียบภายหลัง">labels</a>
+    <button class="btn ghost" id="newJob" title="เริ่มงานใหม่">งานใหม่</button>
+  </div>
+</header>
+
+<!-- ======================= upload ======================= -->
+<main id="uploadView" class="upload">
+  <section class="drop" id="drop" tabindex="0">
+    <div class="drop-icon" aria-hidden="true">⇪</div>
+    <div class="drop-title">ลากไฟล์ GPR มาวางที่นี่ หรือคลิกเพื่อเลือก</div>
+    <div class="drop-hint">เลือกได้หลายเส้นพร้อมกัน ใส่ไฟล์คู่ให้ครบ (เช่น .iprh + .iprb, .rad + .rd3, .HD + .DT1) และไฟล์ .txt ที่ชื่อเดียวกัน<br>
+      รองรับ ImpulseRadar · MALA · GSSI .DZT · Sensors &amp; Software .DT1 · SEG-Y</div>
+    <input type="file" id="fileInput" multiple hidden>
+  </section>
+
+  <section class="filelist" id="fileList" hidden>
+    <h3>ไฟล์ที่เลือก</h3>
+    <table><thead><tr><th>ไฟล์</th><th>ขนาด</th><th>บทบาท</th><th></th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section class="info card">
+    <h3>ข้อมูลงาน <span class="muted">(ไม่บังคับ แก้ภายหลังได้)</span></h3>
+    <form id="infoForm" class="grid-form">
+      <label>โครงการ<input name="project"></label>
+      <label>สถานที่<input name="site"></label>
+      <label>ผู้ว่าจ้าง<input name="client"></label>
+      <label>วันที่สำรวจ<input name="survey_date" type="date"></label>
+      <label>ผู้สำรวจ<input name="operator"></label>
+      <label>ผู้ตรวจทาน<input name="reviewer" placeholder="ชื่อที่จะบันทึกใน labels"></label>
+      <label>การใช้พื้นผิว
+        <select name="surface_use">
+          <option value="unknown">ไม่ระบุ</option><option value="road">ถนน</option>
+          <option value="building">อาคาร</option><option value="open">พื้นที่โล่ง</option>
+        </select></label>
+      <label>ภาษารายงาน
+        <select name="lang"><option value="bi">ไทย + อังกฤษ</option><option value="th">ไทย</option><option value="en">English</option></select></label>
+    </form>
+  </section>
+
+  <div class="actions">
+    <button class="btn primary big" id="runBtn" disabled>เริ่มวิเคราะห์</button>
+    <button class="btn big ghost" id="demoBtn">ลองด้วยข้อมูลสังเคราะห์</button>
+  </div>
+  <p class="muted center">ไฟล์ทั้งหมดอยู่ในเครื่องนี้เท่านั้น โปรแกรมเลือกฟิลเตอร์ให้อัตโนมัติ และปรับเองได้ในหน้าตรวจทาน</p>
+</main>
+
+<!-- ======================= busy ======================= -->
+<div id="busy" class="busy" hidden><div class="spinner"></div><div id="busyText">กำลังประมวลผล…</div></div>
+
+<!-- ======================= review ======================= -->
+<main id="reviewView" class="review" hidden>
+  <aside class="lines">
+    <h3>เส้นสำรวจ</h3>
+    <ul id="lineList"></ul>
+    <div id="problems"></div>
+    <details class="side-info">
+      <summary>ข้อมูลงาน</summary>
+      <form id="infoForm2" class="stack-form"></form>
+    </details>
+  </aside>
+
+  <section class="maincol">
+    <div class="line-head">
+      <div>
+        <h2 id="lineTitle"></h2>
+        <div class="muted small" id="lineFacts"></div>
+      </div>
+      <div class="tools">
+        <label class="toggle"><input type="checkbox" id="showArtifacts" checked> แสดง artifact</label>
+        <label class="toggle"><input type="checkbox" id="showRejected" checked> แสดงโซนที่ปฏิเสธ</label>
+        <button class="btn" id="drawBtn" title="ลากกรอบบนภาพใดก็ได้เพื่อเพิ่มโซนที่โปรแกรมไม่ได้วง">＋ วาดโซนใหม่</button>
+      </div>
+    </div>
+    <div class="readout" id="readout">ชี้บนภาพเพื่อดูตำแหน่ง</div>
+    <div id="panes"></div>
+
+    <details class="recipe card" id="recipe">
+      <summary>ขั้นตอนประมวลผลและพารามิเตอร์ <span class="muted" id="recipeNote"></span></summary>
+      <table class="steps"><thead><tr><th>ขั้นตอน</th><th>ค่าที่ใช้</th><th>เหตุผล</th><th>ผู้เลือก</th></tr></thead><tbody id="stepRows"></tbody></table>
+      <h4>ปรับเอง <span class="muted">(เว้นว่าง = ให้โปรแกรมเลือก)</span></h4>
+      <form id="optForm" class="grid-form">
+        <label>ความเร็วคลื่น (m/ns)<input name="velocity_m_per_ns" type="number" step="0.001" min="0.01" max="0.3"></label>
+        <label>ความถี่กลาง (MHz)<input name="center_freq_mhz" type="number" step="1" min="1"></label>
+        <label>Bandpass ต่ำ (MHz)<input name="band_lo" type="number" step="1" min="1"></label>
+        <label>Bandpass สูง (MHz)<input name="band_hi" type="number" step="1" min="1"></label>
+        <label>Background removal
+          <select name="background"><option value="">อัตโนมัติ (sliding)</option><option value="sliding">sliding</option><option value="global">global</option><option value="none">ปิด</option></select></label>
+        <label>หน้าต่าง background (m)<input name="background_window_m" type="number" step="0.5" min="0.5"></label>
+        <label>Gain สูงสุด (dB)<input name="gain_max_db" type="number" step="1" min="1"></label>
+        <label>หน้าต่าง AGC (ns)<input name="agc_window_ns" type="number" step="1" min="1"></label>
+        <label>Migration
+          <select name="migration"><option value="">ไม่ทำ</option><option value="stolt">Stolt</option><option value="kirchhoff">Kirchhoff</option></select></label>
+        <label class="check"><input name="time_zero" type="checkbox" checked> Time-zero correction</label>
+      </form>
+      <div class="actions left">
+        <button class="btn primary" id="reprocessBtn">ประมวลผลเส้นนี้ใหม่</button>
+        <button class="btn ghost" id="autoBtn">กลับเป็นอัตโนมัติ</button>
+        <span class="spacer"></span>
+        <a class="btn ghost" id="sgyLink">ข้อมูลหลังประมวลผล SEG-Y</a>
+        <a class="btn ghost" id="csvLink">CSV</a>
+      </div>
+    </details>
+  </section>
+
+  <aside class="zones">
+    <div class="zones-head">
+      <h3>โซนผิดปกติ <span class="muted" id="zoneCount"></span></h3>
+      <select id="zoneFilter">
+        <option value="all">ทั้งหมด</option>
+        <option value="todo">ยังไม่ตรวจ</option>
+        <option value="noart">ไม่รวม artifact</option>
+      </select>
+    </div>
+    <div class="hint small muted">คีย์ลัด: J/K เลื่อนโซน · A ยอมรับ · R ปฏิเสธ · E แก้ไข</div>
+    <div id="zoneCards"></div>
+  </aside>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
