@@ -81,3 +81,11 @@ def test_wording_rules_catch(text):
 @pytest.mark.parametrize("text", ["Void-like zone", "โซนคล้ายโพรง", "Red = high amplitude, not a void by itself."])
 def test_wording_rules_allow(text):
     assert find_wording_violations(text) == []
+
+
+@pytest.mark.parametrize("name", ["center_frequency", "dewow", "time_zero", "bandpass", "background_removal",
+                                  "gain_sec", "velocity", "envelope", "agc", "migration", "artifact_check"])
+def test_processing_step_names_are_translated(name):
+    from gpr_analyzer.report.i18n import Translator
+
+    assert Translator("th").has(f"step_{name}")

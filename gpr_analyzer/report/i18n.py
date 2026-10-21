@@ -90,6 +90,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "proc_none": {"th": "ไม่มีการบันทึกขั้นตอนประมวลผล", "en": "No processing steps recorded."},
     "two_tracks": {"th": "การให้คะแนนใช้ข้อมูลที่รักษาแอมพลิจูด (ไม่ใช้ AGC) ส่วน AGC ใช้เพื่อแสดงภาพเท่านั้น",
                    "en": "Scoring uses amplitude-preserving data (no AGC); AGC is used for display only."},
+    "step_center_frequency": {"th": "ความถี่กลางของเสาอากาศ", "en": "Antenna centre frequency"},
     "step_dewow": {"th": "Dewow", "en": "Dewow"},
     "step_time_zero": {"th": "แก้ time-zero", "en": "Time-zero correction"},
     "step_bandpass": {"th": "Bandpass filter", "en": "Bandpass filter"},
