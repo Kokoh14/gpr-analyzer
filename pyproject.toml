@@ -8,16 +8,24 @@ version = "0.1.0"
 description = "Automatic GPR (ground-penetrating radar) processing, anomaly detection and reporting"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "scipy>=1.10", "matplotlib>=3.7"]
+dependencies = [
+    "numpy>=1.24", "scipy>=1.10", "matplotlib>=3.7",
+    # report: PDF with HarfBuzz text shaping (Thai), Word
+    "fpdf2>=2.8", "uharfbuzz>=0.39", "python-docx>=1.1",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 
 [project.scripts]
 gpr-sniff = "gpr_analyzer.io.sniff:main"
+gpr-analyzer = "gpr_analyzer.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["gpr_analyzer*"]
+
+[tool.setuptools.package-data]
+"gpr_analyzer.report" = ["fonts/*.ttf", "fonts/OFL.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -12,7 +12,8 @@ and produce a report.
 | `gpr_analyzer/io/` | File readers (ImpulseRadar, GSSI DZT, MALA, Sensors & Software, SEG-Y) + format sniffer |
 | `gpr_analyzer/processing/` | Dewow, time-zero, bandpass, background removal, gain, migration, attributes |
 | `gpr_analyzer/detect/` | Anomaly detection, artifact flags, rule-based scoring |
-| `gpr_analyzer/report/` | PDF / Word report |
+| `gpr_analyzer/report/` | PDF / Word / HTML report, CSV / JSON / GeoJSON zone exports (see `docs/report.md`) |
+| `gpr_analyzer/cli.py` | `gpr-analyzer analyze <files> --report out.pdf` |
 | `gpr_analyzer/synthetic/` | Synthetic radargrams for tests |
 
 ## Development
