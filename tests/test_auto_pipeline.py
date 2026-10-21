@@ -1,12 +1,15 @@
 import numpy as np
 import pytest
 
+import json
+
+from gpr_analyzer.processing import auto_process
 from gpr_analyzer.processing.auto import ProcessingOptions, run_pipeline
 from gpr_analyzer.synthetic import Layer, PointTarget, make_scene
 
 STEPS = [
     "center_frequency", "dewow", "time_zero", "bandpass", "background_removal",
-    "gain_sec", "velocity", "attributes", "agc_display",
+    "gain_sec", "velocity", "envelope", "agc",
 ]
 
 
@@ -118,7 +121,7 @@ def test_no_hyperbolas_falls_back_to_default_velocity():
     rg, _ = make_scene(targets=[], artifact_traces=[])
     r = run_pipeline(rg)
     assert r.velocity_m_per_ns == 0.1
-    assert "default" in r.velocity_source or "header" in r.velocity_source
+    assert r.velocity_source_code == "default"
     assert r.hyperbola_fits == []
 
 
@@ -136,3 +139,23 @@ def test_raw_is_untouched(scene):
     before = rg.data.copy()
     run_pipeline(rg)
     assert np.array_equal(rg.data, before)
+
+
+def test_auto_process_hook_for_report(scene):
+    rg, _ = scene
+    out, steps = auto_process(rg)
+    assert out.n_traces == rg.n_traces and out.metadata["track"] == "analysis"
+    assert out.metadata["velocity_source"] == "hyperbola_fit"
+    assert out.metadata["processing"] == steps
+    assert [s["name"] for s in steps] == STEPS
+    for s in steps:
+        assert set(s) == {"name", "params", "auto"} and s["auto"] is True and s["params"]["reason"]
+    json.dumps(steps)  # report serialises them
+
+
+def test_user_choices_marked_not_auto(scene):
+    rg, _ = scene
+    _, steps = auto_process(rg, ProcessingOptions(velocity_m_per_ns=0.12, band_mhz=(100.0, 450.0)))
+    auto = {s["name"]: s["auto"] for s in steps}
+    assert auto["velocity"] is False and auto["bandpass"] is False and auto["dewow"] is True
+    assert {s["name"]: s for s in steps}["velocity"]["params"]["velocity_m_per_ns"] == 0.12

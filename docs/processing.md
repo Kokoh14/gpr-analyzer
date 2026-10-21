@@ -1,5 +1,10 @@
 # Processing pipeline
 
+`gpr_analyzer.processing.auto_process(radargram, options=None)` is the CLI/report hook: it
+returns `(analysis Radargram, steps)` where steps are `report.schema.ProcessingStep` dicts
+(`name`, `params` incl. `reason`, `auto`), and sets `metadata["velocity_source"]` to a report
+code (`hyperbola_fit` / `file_header` / `default` / `user`).
+
 `gpr_analyzer.processing.run_pipeline(radargram, options=None)` runs every step with
 values chosen from the data, and records each choice (value + reason) in
 `result.log` / `result.parameter_table()` for the report. Any value can be overridden
