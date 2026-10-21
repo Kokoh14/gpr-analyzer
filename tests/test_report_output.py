@@ -110,3 +110,29 @@ def test_geojson_only_zones_with_coordinates(survey):
     fc = zones_geojson(survey)
     assert [f["properties"]["zone_id"] for f in fc["features"]] == ["A"]
     assert fc["features"][0]["geometry"]["type"] == "LineString"
+
+
+def test_detect_style_evidence_uses_producer_text_and_not_assessed():
+    from gpr_analyzer.report.schema import LineResult, SurveyInfo, SurveyResult, Zone
+
+    z = Zone.from_dict({
+        "zone_id": "A", "line_id": "L1", "trace_start": 124, "trace_end": 325, "time_top_ns": 74.0,
+        "time_bottom_ns": 111.0, "velocity_m_per_ns": 0.135, "velocity_source": "hyperbola_fit",
+        "suspected_type": "void_like", "confidence": "low", "action": "3",
+        "evidence": [
+            {"kind": "present", "code": "strong", "text": "สะท้อนแรง (contrast 6.1)",
+             "params": {"text_en": "strong reflection (contrast 6.1)"}},
+            {"kind": "warning", "code": "roof_polarity", "text": "ตรวจขั้วหลังคาไม่ได้",
+             "params": {"text_en": "roof polarity not assessed", "not_assessed": True}},
+            {"kind": "warning", "code": "risk_no_cross_line", "text": "ไม่มีเส้นตัดขวาง", "params": {}},
+        ]})
+    assert z.evidence[1].kind == "not_assessed"
+    ln = LineResult("L1", "x.iprb", 555, 512, 0.28, 0.05, 0.135, "hyperbola_fit", zones=[z])
+    s = SurveyResult(SurveyInfo(), [ln])
+    th = compose(s, "th", figures=False).all_text()
+    en = compose(s, "en", figures=False).all_text()
+    bi = compose(s, "bi", figures=False).all_text()
+    assert "✓ สะท้อนแรง (contrast 6.1)" in th
+    assert "✓ strong reflection (contrast 6.1)" in en
+    assert "– ตรวจขั้วหลังคาไม่ได้ / roof polarity not assessed" in bi
+    assert "⚠ ไม่มีเส้นตัดขวาง" in en  # no English given: fall back to the Thai text
