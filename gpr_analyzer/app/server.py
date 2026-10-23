@@ -185,6 +185,33 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
             guarded(j.delete_zone, line_id, zone_id)
         return j.to_json()
 
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/sections")
+    def add_section(job_id: str, line_id: str, body: dict = Body(...)) -> dict:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.add_section, line_id, body)
+        return j.to_json()
+
+    @app.delete("/api/jobs/{job_id}/lines/{line_id}/sections/{section_id}")
+    def delete_section(job_id: str, line_id: str, section_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.delete_section, line_id, section_id)
+        return j.to_json()
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/status")
+    def line_status(job_id: str, line_id: str, body: dict = Body(...)) -> dict:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.set_line_status, line_id, str(body.get("status", "")), body.get("note"))
+        return j.to_json()
+
+    @app.get("/api/jobs/{job_id}/summary")
+    def summary(job_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            return j.summary()
+
     @app.post("/api/jobs/{job_id}/lines/{line_id}/reprocess")
     def reprocess(job_id: str, line_id: str, body: dict = Body(...)) -> dict:
         j = job(job_id)

@@ -206,3 +206,21 @@ table.scan input[type=checkbox] { width: auto; }
 tr.st-done td { color: var(--ok); } tr.st-error td { color: var(--bad); } .bad { color: var(--bad); }
 .run-banner { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); border: 1px solid var(--line); border-radius: 8px;
   padding: 6px 10px; margin-bottom: 8px; font-size: 13px; }
+
+/* line status, excluded sections, summary */
+.line-status { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.line-status #statusNote { width: 280px; }
+.line-status .secs { flex-basis: 100%; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.btn.on.st-approved { background: var(--ok); border-color: var(--ok); color: #fff; }
+.btn.on.st-redo { background: var(--warn); border-color: var(--warn); color: #fff; }
+.btn.on.st-pending { border-color: var(--accent); }
+.lst.approved { color: var(--ok); } .lst.redo { color: var(--warn); } .lst.pending { color: var(--muted); }
+.chip.sec { background: color-mix(in srgb, #868e96 18%, transparent); }
+.sbox { position: absolute; top: 0; bottom: 0; pointer-events: none; border-left: 2px solid #495057; border-right: 2px solid #495057;
+  background: repeating-linear-gradient(135deg, rgba(73,80,87,.55) 0 6px, rgba(73,80,87,.15) 6px 12px); }
+.sbox .lbl { position: absolute; top: 2px; left: 2px; font-size: 10px; background: #495057; color: #fff; padding: 0 3px; border-radius: 2px; }
+.summary { max-width: 1200px; margin: 12px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 12px; }
+.summary .kv { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 4px 12px; font-size: 13px; margin-bottom: 8px; }
+.summary .kv span { color: var(--muted); }
+.summary .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.warns { margin: 6px 0; padding-left: 20px; } .warns li { margin: 2px 0; }

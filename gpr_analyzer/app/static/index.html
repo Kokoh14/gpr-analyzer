@@ -12,6 +12,7 @@
   <div class="brand">GPR Analyzer <span class="sub">วิเคราะห์ข้อมูลเรดาร์ตรวจใต้ดิน</span></div>
   <div class="job-meta" id="jobMeta"></div>
   <div class="exports" id="exports" hidden>
+    <button class="btn primary" id="summaryBtn" title="ตรวจข้อมูลสำคัญอีกครั้งก่อนออกรายงาน">สรุปก่อนออกรายงาน</button>
     <span class="exp-label">ส่งออก</span>
     <a class="btn" data-export="report.pdf">PDF</a>
     <a class="btn" data-export="report.docx">Word</a>
@@ -147,8 +148,10 @@
         <label class="toggle"><input type="checkbox" id="showRejected" checked> แสดงโซนที่ปฏิเสธ</label>
         <label class="toggle"><input type="checkbox" id="showRef" checked> แสดงจุดอ้างอิง</label>
         <button class="btn" id="drawBtn" title="ลากกรอบบนภาพใดก็ได้เพื่อเพิ่มโซนที่โปรแกรมไม่ได้วง">＋ วาดโซนใหม่</button>
+        <button class="btn" id="sectionBtn" title="ลากบนภาพเพื่อเลือกช่วงระยะที่จะไม่ใช้ผล (ข้อมูลเสีย สิ่งกีดขวาง นอกพื้นที่)">✂ ไม่ใช้ผลช่วงนี้</button>
       </div>
     </div>
+    <div class="line-status" id="lineStatus"></div>
     <details class="card mapcard" id="mapCard" open>
       <summary>แผนที่ (มุมมองจากด้านบน) <span class="muted small" id="mapNote"></span></summary>
       <div class="map-tools">
@@ -279,6 +282,14 @@
     <div class="hint small muted">คีย์ลัด: J/K เลื่อนโซน · A ยอมรับ · R ปฏิเสธ · E แก้ไข</div>
     <div id="zoneCards"></div>
   </aside>
+</main>
+
+<!-- ======================= summary before the report ======================= -->
+<main id="summaryView" class="summary" hidden>
+  <div class="actions left"><button class="btn" id="summaryBack">← กลับไปตรวจผล</button><span class="spacer"></span>
+    <span class="muted small">ออกรายงาน:</span>
+    <a class="btn primary" data-export="report.pdf">PDF</a><a class="btn" data-export="report.docx">Word</a><a class="btn" data-export="report.html">HTML</a></div>
+  <div id="summaryBody"></div>
 </main>
 
 <div id="toast" class="toast" hidden></div>
