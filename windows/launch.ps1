@@ -48,7 +48,7 @@ function Find-Python {
         if ((Test-Path $p) -and (Test-Python $p @())) { return @($p) }
     }
     if ((Get-Command python -ErrorAction SilentlyContinue) -and (Test-Python "python" @())) { return @("python") }
-    return $null
+    return  # nothing, so @(Find-Python) is empty
 }
 
 function Get-SourceStamp {
@@ -84,15 +84,16 @@ if ($Reinstall -and (Test-Path $Venv)) {
     Remove-Item -Recurse -Force $Venv
 }
 if (-not (Test-Path $VenvPy)) {
-    $py = Find-Python
-    if (-not $py) {
+    # @(): a one-element result ("python") would otherwise unroll to a string and $py[0] would be "p"
+    $py = @(Find-Python)
+    if ($py.Count -eq 0) {
         Say "Python 3.10 or newer was not found." "Yellow"
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             Say "Installing Python 3.12 for this Windows user (about 2-5 minutes, no admin rights needed)..."
             winget install -e --id Python.Python.3.12 --scope user --silent --accept-package-agreements --accept-source-agreements
-            $py = Find-Python
+            $py = @(Find-Python)
         }
-        if (-not $py) {
+        if ($py.Count -eq 0) {
             Start-Process "https://www.python.org/downloads/windows/"
             Fail "Please install Python 3.12 from the page that just opened (tick 'Add python.exe to PATH'), then double-click START-GPR-ANALYZER.bat again."
         }
