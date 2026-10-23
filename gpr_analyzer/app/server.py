@@ -185,6 +185,12 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         with j.lock:
             return geo.job_overview(j.lines)
 
+    @app.get("/api/jobs/{job_id}/dielectric.json")
+    def job_dielectric(job_id: str) -> list[dict]:
+        j = job(job_id)
+        with j.lock:
+            return geo.dielectric_points(j.lines)
+
     @app.post("/api/jobs/{job_id}/lines/{line_id}/zones/{zone_id}/review")
     def review(job_id: str, line_id: str, zone_id: str, body: dict = Body(...)) -> dict:
         j = job(job_id)

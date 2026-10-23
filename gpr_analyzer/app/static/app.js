@@ -560,7 +560,7 @@ function cmap(name, f) {  // f in 0..1 -> css colour
   return `rgb(${c(3)},${c(2)},${c(1)})`;
 }
 const M = {
-  map: null, data: null, overview: [], layers: {}, offline: false,
+  map: null, data: null, overview: [], diel: [], layers: {}, offline: false,
   init() {
     if (this.map || typeof L === "undefined") return !!this.map;
     this.map = L.map("map", { preferCanvas: true, zoomSnap: 0.25, maxZoom: 22 });
@@ -576,10 +576,10 @@ const M = {
     L.control.layers(base, null, { position: "topright" }).addTo(this.map);
     L.control.scale({ metric: true, imperial: false }).addTo(this.map);
     this.map.on("baselayerchange", (e) => { keep("basemap", e.name); this.setOffline(false); });
-    for (const k of ["all", "slice", "zones", "marks", "hover"]) this.layers[k] = L.layerGroup().addTo(this.map);
+    for (const k of ["all", "slice", "diel", "zones", "marks", "hover"]) this.layers[k] = L.layerGroup().addTo(this.map);
     this.map.setView([13.7563, 100.5018], 5);
     $("#sliceDepth").value = store("sliceDepth", 6); $("#sliceThr").value = store("sliceThr", -40);
-    $("#sliceCmap").value = store("sliceCmap", "jet");
+    $("#sliceCmap").value = store("sliceCmap", "jet"); $("#mapMode").value = store("mapMode", "energy");
     return true;
   },
   setOffline(on) {
@@ -593,7 +593,8 @@ const M = {
     try {
       this.overview = await api(jobUrl("/map.json"));
       this.data = l ? await api(lineUrl("/map.json")) : null;
-    } catch (e) { this.data = null; }
+      this.diel = await api(jobUrl("/dielectric.json"));
+    } catch (e) { this.data = null; this.diel = []; }
     const sl = this.data?.slice;
     if (sl) $("#sliceDepth").max = sl.db.length - 1;
     const anyGps = this.overview.some((o) => o.has_gps);
@@ -632,7 +633,7 @@ const M = {
     $("#mapMsg").hidden = !!d?.has_gps;
     if (!d?.has_gps) {
       $("#mapMsg").textContent = `เส้น ${S.line} ไม่มีไฟล์ GPS (.cor) จึงวางบนแผนที่ไม่ได้` + (this.overview.some((o) => o.has_gps) ? " (แสดงเส้นอื่นที่มี GPS)" : "");
-      ly.slice.clearLayers(); ly.zones.clearLayers();
+      ly.slice.clearLayers(); ly.zones.clearLayers(); this.drawSlice();
       const pts = this.overview.filter((o) => o.has_gps).flatMap((o) => o.points);
       if (fit && pts.length) this.map.fitBounds(pts, { padding: [20, 20] });
       return;
@@ -650,6 +651,11 @@ const M = {
   fit() { if (this.data?.has_gps) this.map.fitBounds(this.data.points, { padding: [30, 30], maxZoom: 21 }); },
   drawSlice() {
     const d = this.data, ly = this.layers.slice; ly.clearLayers();
+    const mode = $("#mapMode").value; keep("mapMode", mode);
+    $("#sliceThrBox").hidden = mode !== "energy";
+    if (mode === "dielectric") { this.drawDiel(); return; }
+    this.layers.diel.clearLayers();
+    $("#mapHelp").textContent = "สี = พลังงานสะท้อนที่ความลึกที่เลือก เทียบกับค่าสูงสุดของเส้น (dB) ใช้ดูตำแหน่ง ไม่ใช่ความน่าจะเป็น";
     if (!d?.has_gps) return;
     const sl = d.slice, i = Math.min(+$("#sliceDepth").value, sl.db.length - 1), thr = +$("#sliceThr").value, name = $("#sliceCmap").value;
     const row = sl.db[i], [d0, d1] = this.band();
@@ -664,6 +670,35 @@ const M = {
     }
     drawGuides();
     keep("sliceDepth", i); keep("sliceThr", thr); keep("sliceCmap", name);
+  },
+  // Dielectric: εr = (c/v)² at each fitted hyperbola, the average from the ground surface down to its apex.
+  // Points shallower than the slider show faded, points in the selected band show large, deeper ones are hidden.
+  drawDiel() {
+    const ly = this.layers.diel; ly.clearLayers();
+    const name = $("#sliceCmap").value, band = this.band();
+    const col = (e) => cmap(name, Math.log(e) / Math.log(81));  // log scale: air 1 … water 81
+    $("#sliceDepthLbl").textContent = band ? `${band[0].toFixed(2)}–${band[1].toFixed(2)} m` : "ทุกความลึก";
+    $("#sliceLegend").innerHTML = `<span class="legend">εr 1 <span class="bar" style="background:linear-gradient(90deg,${[0, .25, .5, .75, 1].map((f) => cmap(name, f)).join(",")})"></span> 81 (กลาง = 9)</span>`;
+    const lines = this.diel.filter((x) => x.has_gps && ($("#mapAll").checked || x.line_id === S.line));
+    const n = lines.reduce((a, x) => a + x.points.length, 0);
+    $("#mapHelp").textContent = `สี = ค่า dielectric (εr) จากการฟิตไฮเพอร์โบลา ${n} จุด เป็นค่าเฉลี่ยจากผิวดินถึงความลึกของจุดนั้น ` +
+      "จุดใหญ่ = อยู่ในช่วงความลึกที่เลือก จุดจาง = ตื้นกว่า · ไม่มีการเดาค่าระหว่างจุด · แนวสีเทาประ = ใช้ความเร็วค่าตั้งต้น/จากไฟล์ ไม่ได้วัด";
+    for (const x of lines) {
+      const o = this.overview.find((v) => v.line_id === x.line_id);
+      if (o?.has_gps) {  // the velocity the line was processed with
+        const measured = x.velocity_source === "hyperbola_fit";
+        L.polyline(o.points, { color: measured ? col(x.eps_r) : "#adb5bd", weight: x.line_id === S.line ? 5 : 3, opacity: 0.9, dashArray: measured ? null : "4 6" })
+          .addTo(ly).bindTooltip(`${esc(x.line_id)} · ใช้ v ${x.velocity_m_per_ns} m/ns (εr ${x.eps_r}) · ${measured ? "ค่ากลางจากไฮเพอร์โบลา" : "ไม่ได้วัด"}`, { sticky: true });
+      }
+      for (const p of x.points) {
+        if (band && p.depth_m > band[1]) continue;
+        const inBand = !band || p.depth_m >= band[0];
+        L.circleMarker([p.lat, p.lon], { radius: inBand ? 9 : 5, color: "#fff", weight: inBand ? 2 : 1, fillColor: col(p.eps_r), fillOpacity: inBand ? 1 : 0.45 })
+          .addTo(ly).on("click", () => (x.line_id === S.line ? this.goTo(p.trace) : switchLine(x.line_id)))
+          .bindTooltip(`<b>εr ${p.eps_r}</b> · v ${p.velocity_m_per_ns} m/ns<br>${esc(x.line_id)} trace ${p.trace} · ลึก ${p.depth_m.toFixed(2)} m · R² ${p.r2}`, { sticky: true });
+      }
+    }
+    drawGuides();
   },
   drawZones() {
     const ly = this.layers.zones; ly.clearLayers();
@@ -1080,7 +1115,7 @@ $("#summaryBtn").addEventListener("click", openSummary);
 $("#summaryBack").addEventListener("click", showReview);
 $("#showArtifacts").addEventListener("change", () => { refreshOverlays(); M.drawZones(); });
 $("#showRejected").addEventListener("change", () => { refreshOverlays(); M.drawZones(); });
-for (const id of ["#sliceDepth", "#sliceThr", "#sliceCmap"]) $(id).addEventListener("input", () => M.drawSlice());
+for (const id of ["#sliceDepth", "#sliceThr", "#sliceCmap", "#mapMode"]) $(id).addEventListener("input", () => M.drawSlice());
 $("#mapZones").addEventListener("change", () => M.drawZones());
 $("#mapAll").addEventListener("change", () => M.draw(false));
 $("#mapFit").addEventListener("click", (e) => { e.preventDefault(); M.fit(); });

@@ -61,3 +61,22 @@ def test_old_reference_sources_are_read_as_viewpoint():
     assert st["features"][0]["source"] == "viewpoint" and set(ls["meta"]) == {"viewpoint"}
     assert ls["picks"][0]["source"] == ls["images"][0]["source"] == "viewpoint"
     assert set(cmp.SOURCES) == {"viewpoint", "geolitix"}
+
+
+def test_dielectric_points_from_hyperbola_fits(tmp_path):
+    assert geo.dielectric(geo.LIGHT_M_PER_NS / 3) == pytest.approx(9.0)
+    c = TestClient(create_app(tmp_path / "jobs", background=False))
+    jid = c.post("/api/demo").json()["job_id"]
+    d = {x["line_id"]: x for x in c.get(f"/api/jobs/{jid}/dielectric.json").json()}
+    l1, l2 = d["L1"], d["L2"]
+    assert l1["velocity_source"] == "default" and l1["points"] == []
+    assert l2["velocity_source"] == "hyperbola_fit" and l2["has_gps"] and len(l2["points"]) == 2
+    for p in l2["points"]:
+        assert p["eps_r"] == pytest.approx(geo.dielectric(p["velocity_m_per_ns"]), abs=0.2)
+        assert 0 <= p["trace"] < 2000 and abs(p["lat"]) <= 90 and p["depth_m"] > 0
+    # a fit inside a section excluded from the results is left out
+    t = l2["points"][0]["trace"]
+    r = c.post(f"/api/jobs/{jid}/lines/L2/sections", json={"trace_start": t - 5, "trace_end": t + 5, "reason": "test"})
+    assert r.status_code == 200
+    l2 = next(x for x in c.get(f"/api/jobs/{jid}/dielectric.json").json() if x["line_id"] == "L2")
+    assert len(l2["points"]) == 1

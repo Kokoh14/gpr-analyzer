@@ -5,6 +5,10 @@ metadata["gps"]), one row every few traces. Every trace gets a position by inter
 trace index. The top-view slice is shown like the depth slices of IDS AiMaps on a single line: for each
 depth band, the strongest Hilbert-envelope value per trace in dB below the line's maximum. It is a
 display aid (relative energy), not a probability and not a score.
+
+The dielectric map uses the diffraction hyperbolas fitted during processing: each fit gives the average
+wave velocity from the ground surface down to its apex, so εr = (c / v)². Values exist only at the fitted
+points; nothing is interpolated between them.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import numpy as np
 
 EARTH_RADIUS_M = 6371008.8
 SLICE_FLOOR_DB = -40
+LIGHT_M_PER_NS = 0.299792458
 MAX_MAP_TRACES = 1500  # traces sent to the map; longer lines are thinned (max over each group)
 
 
@@ -115,4 +120,37 @@ def job_overview(lines: list[Any]) -> list[dict[str, Any]]:
         idx = sorted(set(np.linspace(0, a.n_traces - 1, min(a.n_traces, 200)).astype(int).tolist()))
         out.append({"line_id": ln.line_id, "source_file": ln.source_file, "has_gps": True,
                     "points": [[round(float(lat[i]), 7), round(float(lon[i]), 7)] for i in idx]})
+    return out
+
+
+def dielectric(velocity_m_per_ns: float) -> float:
+    """Relative permittivity εr = (c / v)² for a low-loss medium."""
+    return (LIGHT_M_PER_NS / velocity_m_per_ns) ** 2
+
+
+def dielectric_points(lines: list[Any]) -> list[dict[str, Any]]:
+    """Per line: the velocity used, and every hyperbola fit with its position, depth and εr.
+
+    Fits inside sections the user excluded from the results are left out.
+    """
+    out = []
+    for ln in lines:
+        res, a = ln.result, ln.result.analysis
+        item: dict[str, Any] = {"line_id": ln.line_id, "has_gps": False,
+                                "velocity_m_per_ns": round(res.velocity_m_per_ns, 4),
+                                "velocity_source": res.velocity_source_code,
+                                "eps_r": round(dielectric(res.velocity_m_per_ns), 1), "points": []}
+        out.append(item)
+        pos = trace_positions(ln.raw.metadata.get("gps"), a.n_traces)
+        if pos is None or not a.dx_m:
+            continue
+        lat, lon = pos
+        item["has_gps"] = True
+        for f in res.hyperbola_fits:
+            tr = int(round(f.x0_m / a.dx_m))
+            if not 0 <= tr < a.n_traces or any(s["trace_start"] <= tr <= s["trace_end"] for s in ln.sections):
+                continue
+            item["points"].append({"trace": tr, "lat": round(float(lat[tr]), 7), "lon": round(float(lon[tr]), 7),
+                                   "depth_m": round(f.depth_m, 3), "velocity_m_per_ns": round(f.velocity_m_per_ns, 4),
+                                   "eps_r": round(dielectric(f.velocity_m_per_ns), 1), "r2": round(f.r2, 3)})
     return out
