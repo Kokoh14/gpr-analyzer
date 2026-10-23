@@ -17,7 +17,7 @@ from gpr_analyzer.app.server import create_app  # noqa: E402
 
 @pytest.fixture()
 def client(tmp_path):
-    return TestClient(create_app(tmp_path / "jobs"))
+    return TestClient(create_app(tmp_path / "jobs", background=False))
 
 
 def test_sort_files_pairs_and_companions(tmp_path):

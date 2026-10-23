@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gpr_analyzer.app import geo
+from gpr_analyzer.app import folders, geo
 from gpr_analyzer.app.files import safe_name
 from gpr_analyzer.app.compare import TEMPLATE_CSV
 from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
@@ -24,7 +24,8 @@ MEDIA = {".pdf": "application/pdf", ".html": "text/html; charset=utf-8", ".csv":
          ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 
 
-def create_app(workdir: Path) -> FastAPI:
+def create_app(workdir: Path, background: bool = True) -> FastAPI:
+    """background=False processes uploads inside the request (tests)."""
     store = JobStore(workdir)
     app = FastAPI(title="GPR Analyzer", docs_url=None, redoc_url=None)
     app.state.store = store
@@ -62,10 +63,67 @@ def create_app(workdir: Path) -> FastAPI:
                 while chunk := f.file.read(1 << 20):
                     out.write(chunk)
             paths.append(p)
+        return begin(j, paths)
+
+    def begin(j: Job, paths: list[Path], ranges: dict | None = None, include: set[str] | None = None) -> dict:
         with j.lock:
-            j.load(paths)
+            j.plan_files(paths, ranges, include)
             j.save()
-        return j.to_json()
+        if background:
+            j.start()
+        else:
+            j.run_plan()
+        with j.lock:
+            return j.to_json()
+
+    # ---------------------------------------------------------- data folder on this computer
+    @app.post("/api/pick-folder")
+    def pick_folder(body: dict = Body(default={})) -> dict:
+        try:
+            return {"path": folders.pick_folder(start=str(body.get("start") or ""))}
+        except RuntimeError as e:
+            raise HTTPException(501, str(e)) from None
+
+    @app.get("/api/fs")
+    def list_dir(path: str = "") -> dict:
+        return guarded(folders.list_dir, path)
+
+    @app.post("/api/scan")
+    def scan(body: dict = Body(...)) -> dict:
+        return guarded(folders.scan_folder, str(body.get("path", "")), bool(body.get("recursive")))
+
+    @app.post("/api/jobs/from-folder")
+    def from_folder(body: dict = Body(...)) -> dict:
+        path = str(body.get("path", ""))
+        files = guarded(folders.folder_files, path, bool(body.get("recursive")))
+        include = set(body["include"]) if body.get("include") is not None else None
+        j = store.new()
+        j.source_folder = str(Path(path).expanduser())
+        if body.get("info"):
+            with j.lock:
+                guarded(j.set_info, body["info"])
+        return begin(j, files, body.get("ranges") or {}, include)
+
+    @app.get("/api/jobs/{job_id}/progress")
+    def progress(job_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            return {**j.progress_json(), "n_lines": len(j.lines)}
+
+    @app.post("/api/jobs/{job_id}/resume")
+    def resume(job_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            if background:
+                j.resume()
+            else:
+                j.resume_now()
+            return j.to_json()
+
+    @app.get("/api/jobs/{job_id}/log.txt")
+    def log_txt(job_id: str) -> Response:
+        p = job(job_id).folder / "log.txt"
+        return Response(p.read_text(encoding="utf-8") if p.exists() else "", media_type="text/plain; charset=utf-8")
 
     @app.post("/api/demo")
     def demo() -> dict:
@@ -73,9 +131,8 @@ def create_app(workdir: Path) -> FastAPI:
 
         j = store.new()
         with j.lock:
-            j.load(write_demo_files(j.upload_dir))
             j.set_info({"project": "Demo (synthetic data)", "site": "-", "surface_use": "road"})
-        return j.to_json()
+        return begin(j, write_demo_files(j.upload_dir))
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict:

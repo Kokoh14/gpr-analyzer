@@ -35,7 +35,7 @@ def test_path_length_and_slices():
 
 
 def test_demo_map_endpoints_and_coordinates(tmp_path):
-    c = TestClient(create_app(tmp_path / "jobs"))
+    c = TestClient(create_app(tmp_path / "jobs", background=False))
     j = c.post("/api/demo").json()
     jid, ln = j["job_id"], j["lines"][0]
     assert ln["has_gps"] and "viewpoint" in ln["views"]

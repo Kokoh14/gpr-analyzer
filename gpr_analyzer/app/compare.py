@@ -83,13 +83,14 @@ class LineGeom:
     dx_m: float | None
     time_window_ns: float
     velocity_m_per_ns: float
+    offset_traces: int = 0  # first trace of a line processed over a distance range; reference metres are from the line start
 
     def trace(self, x: float, unit: str) -> float:
         if unit == "trace":
             return x
         if not self.dx_m:
             raise ValueError("this line has no trace spacing; give the reference position in traces")
-        return x / self.dx_m
+        return x / self.dx_m - self.offset_traces
 
     def ns(self, y: float, unit: str, velocity: float | None) -> float:
         return y if unit == "ns" else 2.0 * y / (velocity or self.velocity_m_per_ns)
@@ -195,7 +196,7 @@ def compare_line(ls: dict[str, Any], zones: list[dict[str, Any]], g: LineGeom,
         t0, t1, n0, n1 = boxes[rid]
         row = {"kind": "pair" if zid else "ref_only", "ref_id": rid, "zone_id": zid, "source": p["source"],
                "label": p["label"], "ref_type": p["ref_type"], "auto": "match" if zid else "missed",
-               "ref_x_start_m": _m(t0, g), "ref_x_end_m": _m(t1, g), "ref_trace_start": round(t0, 1),
+               "ref_x_start_m": _m(t0 + g.offset_traces, g), "ref_x_end_m": _m(t1 + g.offset_traces, g), "ref_trace_start": round(t0, 1),
                "ref_trace_end": round(t1, 1), "ref_time_top_ns": round(n0, 2), "ref_time_bottom_ns": round(n1, 2),
                # depth as the reference program shows it (its own velocity), else from time with ours
                "ref_depth_top_m": round(p["top"] if p["y_unit"] == "m" else g.depth(n0), 3),

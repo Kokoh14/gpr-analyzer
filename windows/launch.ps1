@@ -146,9 +146,17 @@ if ($SmokeTest) {
         foreach ($i in 1..60) { Start-Sleep 1; if (Test-AppRunning) { $ok = $true; break } }
         if (-not $ok) { Fail "the app did not start within 60 s." }
         $job = Invoke-RestMethod -Method Post "$($Url)api/demo" -ContentType "application/json" -Body "{}"
-        if ($job.lines.Count -lt 1) { Fail "demo job has no lines." }
+        # the demo is processed in the background, like a real job: wait for it to finish
+        $prog = $null
+        foreach ($i in 1..300) {
+            Start-Sleep 1
+            $prog = Invoke-RestMethod "$($Url)api/jobs/$($job.job_id)/progress"
+            if ($prog.state -in @("done", "error", "interrupted")) { break }
+        }
+        if ($prog.state -ne "done") { Fail "demo processing did not finish (state: $($prog.state))." }
+        if ($prog.n_lines -lt 1) { Fail "demo job has no lines." }
         Invoke-WebRequest -UseBasicParsing "$($Url)api/jobs/$($job.job_id)/export/report.pdf" -OutFile (Join-Path $env:TEMP "gpr-smoke.pdf")
-        Say "Smoke test passed: $($job.lines.Count) lines, report written." "Green"
+        Say "Smoke test passed: $($prog.n_lines) lines, report written." "Green"
     } finally { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
     exit 0
 }
