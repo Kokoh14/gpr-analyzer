@@ -61,8 +61,16 @@ def first_break_picks(data: np.ndarray, threshold: float = 0.3, search_samples: 
     the search; the pick is the largest |amplitude| within search_samples after it
     (about one period, so a wavelet side lobe is not mistaken for the main peak),
     refined to sub-sample precision with a parabola through the peak.
+
+    Only lobes of one polarity are considered: the polarity of the strongest lobe of the
+    stacked trace. On real 400 MHz CrossOver data the positive and negative direct-wave lobes
+    are nearly equal, and picking |amplitude| jumped between them trace to trace (6 samples),
+    which the alignment then turned into vertical stripes.
     """
-    a = np.abs(data).astype(np.float64)
+    d = data.astype(np.float64)
+    stack = d.mean(axis=1)
+    sign = 1.0 if stack.size == 0 or stack[int(np.argmax(np.abs(stack)))] >= 0 else -1.0
+    a = np.clip(sign * d, 0.0, None)
     mx = a.max(axis=0)
     mx[mx == 0] = 1.0
     first = np.argmax(a >= threshold * mx, axis=0)
@@ -78,6 +86,11 @@ def first_break_picks(data: np.ndarray, threshold: float = 0.3, search_samples: 
                 frac = float(np.clip(0.5 * (a[k - 1, j] - a[k + 1, j]) / den, -0.5, 0.5))
         picks[j] = k + frac
     return picks
+
+
+def time_zero_static(data: np.ndarray, zero_sample: int) -> np.ndarray:
+    """Cut the samples above zero_sample (same shift for every trace)."""
+    return np.ascontiguousarray(data[int(zero_sample):]).astype(np.float32)
 
 
 def time_zero_correct(data: np.ndarray, picks: np.ndarray, target_sample: int) -> np.ndarray:

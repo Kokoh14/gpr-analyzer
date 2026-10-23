@@ -98,6 +98,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "step_gain": {"th": "Gain", "en": "Gain"},
     "step_gain_sec": {"th": "Gain แบบ SEC", "en": "SEC gain"},
     "step_agc": {"th": "AGC (แสดงผลเท่านั้น)", "en": "AGC (display only)"},
+    "step_viewpoint_display": {"th": "ภาพแบบ ViewPoint (แสดงผลเท่านั้น)", "en": "ViewPoint-like view (display only)"},
     "step_migration": {"th": "Migration", "en": "Migration"},
     "step_envelope": {"th": "Hilbert envelope", "en": "Hilbert envelope"},
     "step_velocity": {"th": "หาความเร็วคลื่น", "en": "Velocity estimation"},

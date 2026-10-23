@@ -18,7 +18,7 @@ from matplotlib.figure import Figure  # noqa: E402
 
 from gpr_analyzer.core import Radargram  # noqa: E402
 
-VIEWS = ("grey", "high_gain", "envelope")
+VIEWS = ("grey", "high_gain", "envelope", "viewpoint")
 
 ENVELOPE_NOTE = "High envelope = strong reflection, not by itself a void"
 
@@ -81,13 +81,35 @@ def envelope_view(
     return fig
 
 
+def viewpoint_view(rg: Radargram, title: str = "ViewPoint-like (display only)", clip_pct: float = 97.0) -> Figure:
+    """Greyscale like the ImpulseRadar field screen: depth on the left (antenna-separation aware)."""
+    fig = Figure(figsize=(10, 4.5), dpi=110, layout="constrained")
+    ax = fig.add_subplot(1, 1, 1)
+    x = rg.distance_axis()
+    z = rg.depth_axis()
+    extent = (x[0], x[-1] if x.size > 1 else 1.0, z[-1] if z.size > 1 else 1.0, z[0])
+    c = _clip(rg.data, clip_pct)
+    # depth is not linear in samples near the surface; resample rows onto an even depth grid
+    zz = np.linspace(z[0], z[-1], rg.n_samples)
+    rows = np.interp(zz, z, np.arange(rg.n_samples))
+    img = np.array([np.interp(rows, np.arange(rg.n_samples), col) for col in rg.data.T]).T
+    ax.imshow(img, cmap="gray", vmin=-c, vmax=c, aspect="auto", extent=extent, interpolation="bilinear")
+    ax.set_xlabel("Distance (m)" if rg.dx_m is not None else "Trace")
+    ax.set_ylabel(f"Depth (m) at v = {rg.velocity_m_per_ns:.3f} m/ns")
+    ax.set_title(title, fontsize=10)
+    return fig
+
+
 def render_views(result) -> dict[str, Figure]:
-    """Figures for a ProcessingResult: grey (analysis), high_gain (display track), envelope."""
-    return {
+    """Figures for a ProcessingResult: grey (analysis), high_gain (display track), envelope, viewpoint."""
+    figs = {
         "grey": grey_view(result.analysis),
         "high_gain": high_gain_view(result.display),
         "envelope": envelope_view(result.envelope),
     }
+    if getattr(result, "viewpoint", None) is not None:
+        figs["viewpoint"] = viewpoint_view(result.viewpoint)
+    return figs
 
 
 def save_views(result, out_dir: str | Path, stem: str = "line", fmt: str = "png") -> dict[str, Path]:

@@ -20,6 +20,7 @@ from gpr_analyzer.core import Radargram
 from gpr_analyzer.processing import filters as F
 from gpr_analyzer.processing.migration import kirchhoff_migration, stolt_migration
 from gpr_analyzer.processing.velocity import HyperbolaFit, estimate_velocity
+from gpr_analyzer.processing.viewpoint import viewpoint_display
 
 DEFAULT_VELOCITY = 0.1  # m/ns, typical moist soil; used only when no hyperbola fits
 
@@ -31,6 +32,7 @@ class ProcessingOptions:
     center_freq_mhz: float | None = None
     dewow_window_ns: float | None = None
     time_zero: bool = True
+    time_zero_source: str = "auto"  # "auto" (header ZERO LEVEL if present, else pick) | "header" | "pick"
     time_zero_threshold: float = 0.3
     band_mhz: tuple[float, float] | None = None
     background: str = "sliding"  # "sliding" | "global" | "none"
@@ -81,6 +83,7 @@ class ProcessingResult:
     gain_curve: np.ndarray
     noise_floor_sample: int
     log: list[StepLog] = field(default_factory=list)
+    viewpoint: Radargram | None = None  # ViewPoint-like screen (processing/viewpoint.py), display only
 
     def parameter_table(self) -> list[dict[str, Any]]:
         """Rows for the report's processing-parameters section."""
@@ -145,7 +148,23 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None) -> Pro
     )
 
     # 3. Time zero
-    if opt.time_zero:
+    zl = rg.metadata.get("zero_level_sample")
+    use_header = opt.time_zero and zl and opt.time_zero_source in ("auto", "header")
+    if opt.time_zero_source == "header" and not zl:
+        raise ValueError("time_zero_source='header' but the file has no ZERO LEVEL")
+    if use_header:
+        target = int(zl)
+        d = F.time_zero_static(d, target)
+        log.append(
+            StepLog(
+                "time_zero",
+                {"source": "header ZERO LEVEL", "time_zero_sample": target, "time_zero_ns": round(target * dt, 2)},
+                "the acquisition unit's own zero (ViewPoint puts depth 0 there); one shift for all traces, "
+                "since the direct wave on real CrossOver lines moves less than 0.2 sample",
+                opt.time_zero_source == "auto",
+            )
+        )
+    elif opt.time_zero:
         picks = F.first_break_picks(d, opt.time_zero_threshold, search_samples=max(int(round(period / dt)), 2))
         target = int(round(float(np.median(picks))))
         d = F.time_zero_correct(d, picks, target)
@@ -273,9 +292,22 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None) -> Pro
         )
     )
 
+    # 11. ViewPoint-like track (same zero as above, its own fitted background window and gain)
+    zero_used = int(zl) if use_header else (target if opt.time_zero else 0)
+    vp, vp_params = viewpoint_display(rg, zero_sample=zero_used)
+    log.append(
+        StepLog(
+            "viewpoint_display",
+            vp_params,
+            "display only: reproduces the ImpulseRadar ViewPoint screen (fitted to its screenshots, docs/viewpoint-fit.md)",
+        )
+    )
+
     def mk(arr: np.ndarray, kind: str) -> Radargram:
         out = rg.copy_with(data=arr, velocity_m_per_ns=v)
         out.metadata["track"] = kind
+        if opt.time_zero:
+            out.metadata.pop("zero_level_sample", None)  # row 0 is time zero now
         return out
 
     return ProcessingResult(
@@ -293,4 +325,5 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None) -> Pro
         gain_curve=gain,
         noise_floor_sample=cap,
         log=log,
+        viewpoint=mk(vp.data, "viewpoint"),
     )

@@ -9,7 +9,7 @@ from gpr_analyzer.synthetic import Layer, PointTarget, make_scene
 
 STEPS = [
     "center_frequency", "dewow", "time_zero", "bandpass", "background_removal",
-    "gain_sec", "velocity", "envelope", "agc",
+    "gain_sec", "velocity", "envelope", "agc", "viewpoint_display",
 ]
 
 
