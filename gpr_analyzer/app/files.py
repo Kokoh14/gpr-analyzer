@@ -81,7 +81,8 @@ def preview_text(path: Path, limit: int = 4000) -> str | None:
     """First bytes of a text companion, decoded leniently; None for binary files."""
     if path.suffix.lower() not in TEXT_EXTENSIONS:
         return None
-    raw = path.read_bytes()[:limit]
+    with path.open("rb") as stream:
+        raw = stream.read(limit)
     for enc in ("utf-8", "cp874", "latin-1"):  # cp874 = Thai Windows
         try:
             return raw.decode(enc)
