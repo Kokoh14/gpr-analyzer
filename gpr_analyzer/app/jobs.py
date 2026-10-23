@@ -22,7 +22,7 @@ from typing import Any, Callable
 import numpy as np
 
 from gpr_analyzer.app import compare as cmp
-from gpr_analyzer.app import geo
+from gpr_analyzer.app import geo, kml
 from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
 from gpr_analyzer.core import Radargram
 from gpr_analyzer.detect import analyze_line, to_report_records
@@ -752,9 +752,59 @@ class Job:
         out = self.folder / "exports"
         out.mkdir(exist_ok=True)
         allowed = {"report.pdf", "report.docx", "report.html", "zones.csv", "survey.json"}
+        if name in ("survey.kml", "survey.kmz"):
+            return self.export_kml(out / name)
         if name not in allowed:
             raise KeyError(name)
         return write_report(self.survey(), out / name, lang=self.lang)
+
+    def export_kml(self, path: Path) -> Path:
+        """Google Earth file in ViewPoint's layout: tracks, field markers (.mrk) and our zones (kml.py)."""
+        profiles, shots = kml.job_profiles(self.lines)
+        text = kml.build_kml(profiles)
+        if path.suffix == ".kml":
+            path.write_bytes(text.encode("utf-8"))
+        else:
+            images = {img: kml.snapshot_jpg(*args) for img, args in shots.items()}
+            stem = safe_name(self.info.project or self.job_id)
+            path.write_bytes(kml.build_kmz(f"{stem}.kml", text, images, kml.logo_png()))
+        return path
+
+    def import_ref_kml(self, data: bytes, replace: bool = True) -> dict[str, Any]:
+        """ViewPoint KML/KMZ markers as reference picks (the "answer key"), on every line of the same profile.
+
+        A marker goes to the trace nearest its position on our GPS track and to its target depth.
+        Picks from an earlier KML import are replaced. The profiles are kept for the map.
+        """
+        profiles = kml.parse(data)
+        by_name = {p.name: p for p in profiles}
+        added, unmatched = 0, []
+        for ln in self.lines:
+            p = by_name.get(kml.profile_name(ln.source_file))
+            ls = cmp.line_state(self.comparison, ln.line_id)
+            if replace:
+                ls["picks"] = [q for q in ls["picks"] if not q["note"].startswith(kml.KML_NOTE)]
+            if p is None:
+                continue
+            pos = ln.positions()
+            for m in p.marks:
+                if pos is None or m.depth_m is None:
+                    unmatched.append(f"{ln.line_id} {m.name}")
+                    continue
+                c = kml.mark_trace(m, pos, ln.raw.metadata.get("markers"))
+                pick = cmp.clean_pick({"source": "viewpoint", "x_start": c, "x_unit": "trace", "top": m.depth_m,
+                                       "y_unit": "m", "label": m.name, "ref_type": m.information or m.type_name,
+                                       "note": f"{kml.KML_NOTE} {m.type_name} {m.standard}:{m.index}".strip()},
+                                      cmp.next_ref_id(ls["picks"]))
+                ls["picks"].append(pick)
+                added += 1
+        self.comparison["kml"] = [{"name": p.name, "track": p.track, "marks": [
+            {"name": m.name, "lat": m.lat, "lon": m.lon, "depth_m": m.depth_m, "type": m.type_name,
+             "information": m.information, "colour": kml.mark_colour(m)} for m in p.marks]} for p in profiles]
+        self.save()
+        lines_hit = {kml.profile_name(ln.source_file) for ln in self.lines}
+        return {"added": added, "profiles": len(profiles), "marks": sum(len(p.marks) for p in profiles),
+                "profiles_not_in_job": sorted(set(by_name) - lines_hit), "unmatched": unmatched}
 
     def export_line(self, line_id: str, fmt: str) -> Path:
         """Processed (analysis-track) data of one line as SEG-Y or CSV."""

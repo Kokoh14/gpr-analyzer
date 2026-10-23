@@ -621,10 +621,10 @@ const M = {
   draw(fit) {
     const ly = this.layers;
     ly.all.clearLayers(); ly.marks.clearLayers(); ly.hover.clearLayers();
+    this.drawMarks();
     if ($("#mapAll").checked || !this.data?.has_gps) for (const o of this.overview) {
       if (!o.has_gps || o.line_id === S.line) continue;
-      L.polyline(o.points, { color: "#fff", weight: 4, opacity: 0.9 }).addTo(ly.all);
-      L.polyline(o.points, { color: "#1f6feb", weight: 2 }).addTo(ly.all)
+      L.polyline(o.points, { color: "#00ff00", weight: 4, opacity: 0.9 }).addTo(ly.all)  // ViewPoint's "greenTrack"
         .bindTooltip(`${esc(o.line_id)} · ${esc(o.source_file)} (คลิกเพื่อเปิด)`, { sticky: true })
         .on("click", () => switchLine(o.line_id));
     }
@@ -640,12 +640,26 @@ const M = {
     const [s, e] = d.ends;
     L.circleMarker(s, { radius: 5, color: "#fff", fillColor: "#2f9e44", fillOpacity: 1, weight: 2 }).addTo(ly.marks).bindTooltip(`${S.line} เริ่ม (trace 0)`);
     L.circleMarker(e, { radius: 5, color: "#fff", fillColor: "#c92a2a", fillOpacity: 1, weight: 2 }).addTo(ly.marks).bindTooltip(`${S.line} จบ (trace ${d.n_traces - 1})`);
-    for (const m of d.markers) L.circleMarker([m.lat, m.lon], { radius: 4, color: "#000", fillColor: "#ffd43b", fillOpacity: 1, weight: 1 })
-      .addTo(ly.marks).bindTooltip(`มาร์กเกอร์ trace ${m.trace}${m.type ? " · " + esc(m.type) : ""}`);
     $("#mapNote").textContent = this.offline ? $("#mapNote").textContent
       : `(GPS ${d.gps_fixes} จุด · ยาวตาม GPS ${fmt(d.length_gps_m, 1)} m${d.length_wheel_m ? ` · ตามล้อวัดระยะ ${fmt(d.length_wheel_m, 1)} m` : ""})`;
     this.drawSlice(); this.drawZones();
     if (fit) this.fit();
+  },
+  // Markers as Google Earth shows ViewPoint's KML: field marks from the .mrk files (filled, colour standard of
+  // the mark) and the markers of an imported answer-key KML ("เฉลย", rings). Click for the same balloon text.
+  async drawMarks() {
+    if (!this.layers.vp) this.layers.vp = L.layerGroup().addTo(this.map);
+    if (this.marksFor !== S.job) {
+      try { this.marks = await api(jobUrl("/marks.json")); } catch (e) { this.marks = { field: [], reference: [] }; }
+      this.marksFor = S.job;
+    }
+    const ly = this.layers.vp; ly.clearLayers();
+    const pop = (m, what) => `<b>${esc(m.name)}</b> <span class="muted">${what}</span><br>${esc(m.profile)}<br>`
+      + `Type: ${esc(m.type || "–")}<br>Information: ${esc(m.information || "–")}<br>Target depth: ${m.depth_m == null ? "–" : m.depth_m.toFixed(2) + " m"}`;
+    for (const m of this.marks.reference) L.circleMarker([m.lat, m.lon], { radius: 10, color: m.colour, weight: 3, fill: false })
+      .addTo(ly).bindPopup(pop(m, "เฉลย KML")).bindTooltip(`เฉลย ${esc(m.name)} · ลึก ${fmt(m.depth_m)} m`);
+    for (const m of this.marks.field) L.circleMarker([m.lat, m.lon], { radius: 6, color: "#000", weight: 1, fillColor: m.colour, fillOpacity: 1 })
+      .addTo(ly).bindPopup(pop(m, "จุดมาร์กภาคสนาม (.mrk)")).bindTooltip(`${esc(m.name)} · ลึก ${fmt(m.depth_m)} m (คลิกดูรายละเอียด)`);
   },
   fit() { if (this.data?.has_gps) this.map.fitBounds(this.data.points, { padding: [30, 30], maxZoom: 21 }); },
   drawSlice() {
@@ -1102,6 +1116,18 @@ $("#refCsvInput").addEventListener("change", async (e) => {
     S.job = j; render();
     const r = j.import_result;
     toast(`นำเข้า ${r.added} จุด` + (r.warnings.length ? ` (ข้าม ${r.warnings.length} แถว)` : ""));
+  } catch (err) { toast("นำเข้าไม่ได้: " + err.message); }
+});
+$("#refKmlBtn").addEventListener("click", () => $("#refKmlInput").click());
+$("#refKmlInput").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  try {
+    const j = await upload(jobUrl("/ref/kml"), [f], { fileField: "file" });
+    S.job = j; render(); M.load();
+    const r = j.import_result;
+    toast(`เฉลย KML: ${r.profiles} เส้น ${r.marks} จุดมาร์ก · เป็นจุดอ้างอิงบนเส้นของงานนี้ ${r.added} จุด`
+      + (r.profiles_not_in_job.length ? ` · ${r.profiles_not_in_job.length} เส้นในไฟล์ไม่อยู่ในงานนี้` : ""));
   } catch (err) { toast("นำเข้าไม่ได้: " + err.message); }
 });
 $("#featAdd").addEventListener("click", () => { S.job.comparison.features = [...featureValues(), { feature: "", source: $("#refSource").value || "viewpoint", rating: "untested", note: "" }]; renderFeatures(); });

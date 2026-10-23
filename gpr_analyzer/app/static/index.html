@@ -21,6 +21,8 @@
     <a class="btn" data-export="report.html">HTML</a>
     <a class="btn ghost" data-export="zones.csv" title="ตารางโซน (Excel อ่านภาษาไทยได้)">CSV โซน</a>
     <a class="btn ghost" data-export="survey.json">JSON</a>
+    <a class="btn ghost" data-export="survey.kmz" title="Google Earth แบบเดียวกับ ViewPoint: แนวสแกน จุดมาร์กภาคสนาม และโซนของเรา พร้อมภาพ">KMZ</a>
+    <a class="btn ghost" data-export="survey.kml" title="Google Earth แบบเดียวกับ ViewPoint (ไม่มีภาพ)">KML</a>
     <a class="btn ghost" id="labelsLink" title="บันทึกการตรวจทานทุกครั้ง สำหรับสอบเทียบภายหลัง">labels</a>
     <a class="btn ghost" data-export="comparison.csv" title="ผลเทียบกับซอฟต์แวร์อ้างอิง ทีละจุด (เปิดด้วย Excel)">เทียบผล CSV</a>
     <button class="btn ghost" id="newJob" title="เริ่มงานใหม่">งานใหม่</button>
@@ -242,6 +244,8 @@
         <button class="btn" id="refDrawBtn" title="ลากกรอบบนภาพของเราตรงที่ซอฟต์แวร์อ้างอิงมาร์กไว้">＋ วาดจุดอ้างอิง</button>
         <input type="file" id="refImgInput" accept="image/*" multiple hidden>
         <input type="file" id="refCsvInput" accept=".csv,.txt,.tsv" hidden>
+        <button class="btn" id="refKmlBtn" title="จุดมาร์กใน KML/KMZ ที่ ViewPoint ส่งออก ใช้เป็นเฉลยของทุกเส้นในงานนี้ (แทนที่การนำเข้า KML ครั้งก่อน)">นำเข้าเฉลย KML/KMZ</button>
+        <input type="file" id="refKmlInput" accept=".kml,.kmz" hidden>
       </div>
       <div id="cmpSummary" class="cmp-summary"></div>
       <div id="refImages" class="ref-images"></div>
