@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gpr_analyzer.app import geo
+from gpr_analyzer.app import geo, scene3d
 from gpr_analyzer.app.files import safe_name
 from gpr_analyzer.app.compare import TEMPLATE_CSV
 from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
@@ -80,6 +80,28 @@ def create_app(workdir: Path) -> FastAPI:
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict:
         return job(job_id).to_json()
+
+    @app.post("/api/demo3d")
+    def demo3d() -> dict:
+        from gpr_analyzer.app.demo import write_fence_demo_files
+
+        j = store.new()
+        with j.lock:
+            j.load(write_fence_demo_files(j.upload_dir))
+            j.set_info({"project": "3D fence demo (SYNTHETIC)", "site": "Simulated grid; not a field survey"})
+        return j.to_json()
+
+    @app.get("/api/jobs/{job_id}/scene3d")
+    def get_scene3d(job_id: str, frame: str = "gps", track: str = "grey") -> dict:
+        j = job(job_id)
+        with j.lock:
+            return guarded(scene3d.survey_scene, j, frame, track)
+
+    @app.put("/api/jobs/{job_id}/scene3d/layout")
+    def set_scene3d_layout(job_id: str, body: dict = Body(...)) -> dict:
+        j = job(job_id)
+        with j.lock:
+            return guarded(scene3d.save_layout, j, body)
 
     @app.post("/api/jobs/{job_id}/info")
     def set_info(job_id: str, body: dict = Body(...)) -> dict:

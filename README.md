@@ -21,6 +21,13 @@ and produce a report.
 Download the ZIP, unpack it, double-click `START-GPR-ANALYZER.bat`. Thai guide for testing with real files and
 comparing against ViewPoint / GeoLitix: [`docs/windows-testing.md`](docs/windows-testing.md).
 
+## 3D แบบที่ 1 — positioned survey sections
+
+The local app shows GPS-positioned radargram curtains, scan directions, a movable depth strip,
+orbit/zoom, line visibility and PNG/scene JSON export. Lines without GPS can be placed using saved
+local start/end coordinates. Try **ลอง 3D แบบที่ 1** on the upload page for a synthetic eight-line grid.
+See [3D mode 1](docs/3d-mode-1.md) for coordinate/depth assumptions and verification.
+
 ## Development
 
 ```bash

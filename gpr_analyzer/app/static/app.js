@@ -131,7 +131,9 @@ const zoneOf = (id) => line()?.zones.find((z) => z.zone_id === id);
 
 function render() {
   renderTop(); renderLines(); renderLine();
+  window.dispatchEvent(new CustomEvent("gpr:job", { detail: { job: S.job, line: S.line } }));
 }
+window.getGprSceneContext = () => ({ job: S.job, line: S.line });
 function renderTop() {
   const j = S.job, r = j.review, n = r.auto + r.accepted + r.edited + r.rejected;
   $("#jobMeta").innerHTML = `<b>${esc(j.info.project || "งานสำรวจ")}</b> <span class="muted">${esc(j.info.site || "")}</span>
@@ -512,6 +514,18 @@ async function switchLine(id) {
   S.line = id; S.sel = null; S.editing = null; S.cursor = null; S.view = { x0: 0, x1: 1, y0: 0, y1: 1 };
   render(); M.load();
 }
+
+window.addEventListener("gpr:3d-pick", async (event) => {
+  if (!S.job?.lines.some((ln) => ln.line_id === event.detail.line)) return;
+  await switchLine(event.detail.line);
+  S.cursor = event.detail.trace; centreOn(event.detail.trace); M.hover(event.detail.trace);
+});
+
+$("#demo3dBtn").addEventListener("click", async () => {
+  busy(true, "กำลังสร้างแนวสแกนสังเคราะห์สำหรับ 3D…");
+  try { S.job = await post("/api/demo3d", {}); openReview(); }
+  catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
+});
 
 // ------------------------------------------------------------------ comparison with reference software
 const jobUrl = (p) => `/api/jobs/${S.job.job_id}${p}`;

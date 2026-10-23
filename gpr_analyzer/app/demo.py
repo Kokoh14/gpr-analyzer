@@ -103,3 +103,23 @@ def write_demo_files(folder: Path) -> list[Path]:
                     "Traces: 555, time window 145 ns, trace spacing 0.05 m\n", encoding="utf-8")
     paths.append(note)
     return paths
+
+
+def write_fence_demo_files(folder: Path) -> list[Path]:
+    """Eight synthetic passes, including reversed and crossing lines, for the 3D viewer."""
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for i in range(8):
+        rg, _ = make_scene(n_traces=161, n_samples=320, time_window_ns=100, dx_m=0.1,
+                           velocity_m_per_ns=0.1, seed=40 + i, artifact_traces=[], ringing_ns=None,
+                           targets=[PointTarget(5 + i * 0.2, 1.2), PointTarget(11, 2.2)],
+                           layers=[Layer(3.2, 0.45, 0.01)])
+        stem = folder / f"SYNTHETIC_GRID_{i + 1:02d}"
+        paths += write_impulseradar(rg, stem)
+        if i < 6:
+            x, y, heading = (0, i * 2, 90) if i % 2 == 0 else (16, i * 2, 270)
+        else:
+            x, y, heading = 4 + (i - 6) * 8, -3, 0
+        paths.append(write_cor(rg, stem.with_suffix(".cor"), 13.7386 + y / 111320,
+                               100.531 + x / (111320 * np.cos(np.radians(13.7386))), heading))
+    return paths

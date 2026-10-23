@@ -4,6 +4,7 @@ __pycache__/
 build/
 dist/
 .venv/
+tmp/
 *.png
 !docs/**/*.png
 !gpr_analyzer/app/static/vendor/**/*.png
