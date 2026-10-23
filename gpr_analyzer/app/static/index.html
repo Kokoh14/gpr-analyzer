@@ -14,6 +14,7 @@
   <div class="brand">GPR Analyzer <span class="sub">วิเคราะห์ข้อมูลเรดาร์ตรวจใต้ดิน</span></div>
   <div class="job-meta" id="jobMeta"></div>
   <div class="exports" id="exports" hidden>
+    <button class="btn primary" id="summaryBtn" title="ตรวจข้อมูลสำคัญอีกครั้งก่อนออกรายงาน">สรุปก่อนออกรายงาน</button>
     <span class="exp-label">ส่งออก</span>
     <a class="btn" data-export="report.pdf">PDF</a>
     <a class="btn" data-export="report.docx">Word</a>
@@ -28,9 +29,36 @@
 
 <!-- ======================= upload ======================= -->
 <main id="uploadView" class="upload">
+  <section class="card" id="folderCard">
+    <h3>เลือกโฟลเดอร์ข้อมูล <span class="muted">(ImpulseRadar .iprh + .iprb พร้อม .cor GPS และ .mrk)</span></h3>
+    <div class="folder-bar">
+      <button class="btn primary" id="pickBtn">📁 เลือกโฟลเดอร์…</button>
+      <input id="folderPath" placeholder="หรือวางที่อยู่โฟลเดอร์ เช่น D:\GPR\2026-10-21" spellcheck="false">
+      <button class="btn" id="scanBtn">ตรวจโฟลเดอร์</button>
+      <button class="btn ghost" id="browseBtn" title="เรียกดูโฟลเดอร์ในหน้านี้">เรียกดู…</button>
+      <label class="toggle small"><input type="checkbox" id="recursive"> รวมโฟลเดอร์ย่อย</label>
+    </div>
+    <p class="muted small">โปรแกรมอ่านไฟล์จากโฟลเดอร์โดยตรง ไม่คัดลอก จึงใช้กับข้อมูลขนาดใหญ่ได้ และตรวจความครบถ้วนก่อนเริ่ม</p>
+    <div id="browser" class="browser" hidden></div>
+    <div id="scanResult" hidden>
+      <div id="scanSummary" class="scan-summary"></div>
+      <div id="scanMap" class="scanmap"></div>
+      <div class="actions left small">
+        <button class="btn ghost small" data-sel="all">เลือกทั้งหมด</button>
+        <button class="btn ghost small" data-sel="ok">เฉพาะที่ไม่มีปัญหา</button>
+        <button class="btn ghost small" data-sel="none">ไม่เลือก</button>
+        <span class="muted">ใส่ช่วงระยะ (m) เพื่อประมวลผลเฉพาะช่วงที่สนใจ เว้นว่าง = ทั้งเส้น</span>
+      </div>
+      <div class="scan-table"><table class="scan"><thead><tr><th></th><th>สถานะ</th><th>เส้น</th><th>trace</th><th>ความยาว</th><th>GPS</th>
+        <th>มาร์ก</th><th>ช่วงที่ประมวลผล (m)</th><th>ข้อสังเกต</th></tr></thead><tbody id="scanRows"></tbody></table></div>
+    </div>
+  </section>
+
+  <div class="or muted">หรือ</div>
+
   <section class="drop" id="drop" tabindex="0">
     <div class="drop-icon" aria-hidden="true">⇪</div>
-    <div class="drop-title">ลากไฟล์ GPR มาวางที่นี่ หรือคลิกเพื่อเลือก</div>
+    <div class="drop-title">ลากไฟล์ GPR มาวางที่นี่ หรือคลิกเพื่อเลือกไฟล์</div>
     <div class="drop-hint">เลือกได้หลายเส้นพร้อมกัน ใส่ไฟล์คู่ให้ครบ (เช่น .iprh + .iprb, .rad + .rd3, .HD + .DT1) และไฟล์ .txt ที่ชื่อเดียวกัน<br>
       รองรับ ImpulseRadar · MALA · GSSI .DZT · Sensors &amp; Software .DT1 · SEG-Y</div>
     <input type="file" id="fileInput" multiple hidden>
@@ -69,12 +97,29 @@
 
   <section class="card" id="pastJobs" hidden>
     <h3>งานก่อนหน้า <span class="muted">(เก็บไว้ในเครื่อง เปิดต่อได้)</span></h3>
-    <table class="jobs"><thead><tr><th>งาน</th><th>ไฟล์</th><th>ตรวจแล้ว</th><th>เทียบกับซอฟต์แวร์อ้างอิง</th><th></th></tr></thead><tbody></tbody></table>
+    <table class="jobs"><thead><tr><th>งาน</th><th>ไฟล์</th><th>สถานะ</th><th>ตรวจแล้ว</th><th>เทียบกับซอฟต์แวร์อ้างอิง</th><th></th></tr></thead><tbody></tbody></table>
     <div class="actions left">
       <span class="muted small">สรุปการเทียบผลของทุกงาน:</span>
       <a class="btn ghost" href="/api/compare/export/comparison_lines_all.csv">รายเส้น CSV</a>
       <a class="btn ghost" href="/api/compare/export/comparison_all.csv">รายจุด CSV</a>
       <a class="btn ghost" href="/api/compare/export/features_all.csv">คะแนนฟีเจอร์ CSV</a>
+    </div>
+  </section>
+</main>
+
+<!-- ======================= progress ======================= -->
+<main id="progressView" class="upload" hidden>
+  <section class="card">
+    <h3 id="progTitle">กำลังประมวลผล</h3>
+    <div class="pbar big"><span id="progBar"></span></div>
+    <div class="muted small" id="progNote"></div>
+    <table class="scan prog"><thead><tr><th>#</th><th>ไฟล์</th><th>ช่วง (m)</th><th>สถานะ</th><th>ขั้นตอน</th><th>เส้น</th></tr></thead><tbody id="progRows"></tbody></table>
+    <h4>บันทึกการทำงาน (log.txt) <a class="small" id="logLink" target="_blank">เปิดไฟล์ทั้งหมด</a></h4>
+    <pre class="logbox" id="logBox"></pre>
+    <div class="actions left">
+      <button class="btn primary" id="toReview" disabled>เปิดหน้าตรวจผล</button>
+      <button class="btn" id="resumeBtn" hidden>ทำต่อจากที่ค้าง</button>
+      <span class="muted small">ปิดหน้านี้ได้ งานยังทำต่อ และถ้าไฟดับหรือเครื่องค้าง เปิดงานเดิมแล้วกด "ทำต่อ" จะเริ่มจากเส้นที่ยังไม่เสร็จ</span>
     </div>
   </section>
 </main>
@@ -95,6 +140,7 @@
   </aside>
 
   <section class="maincol">
+    <div class="run-banner" id="runBanner" hidden></div>
     <div class="line-head">
       <div>
         <h2 id="lineTitle"></h2>
@@ -105,6 +151,7 @@
         <label class="toggle"><input type="checkbox" id="showRejected" checked> แสดงโซนที่ปฏิเสธ</label>
         <label class="toggle"><input type="checkbox" id="showRef" checked> แสดงจุดอ้างอิง</label>
         <button class="btn" id="drawBtn" title="ลากกรอบบนภาพใดก็ได้เพื่อเพิ่มโซนที่โปรแกรมไม่ได้วง">＋ วาดโซนใหม่</button>
+        <button class="btn" id="sectionBtn" title="ลากบนภาพเพื่อเลือกช่วงระยะที่จะไม่ใช้ผล (ข้อมูลเสีย สิ่งกีดขวาง นอกพื้นที่)">✂ ไม่ใช้ผลช่วงนี้</button>
       </div>
     </div>
     <details class="card survey3d-card" id="survey3dCard" open>
@@ -150,6 +197,8 @@
           <button class="btn primary small" type="submit">บันทึกพิกัดและเปิดฉากท้องถิ่น</button></form>
       </details>
     </details>
+    <div class="line-status" id="lineStatus"></div>
+
     <details class="card mapcard" id="mapCard" open>
       <summary>แผนที่ (มุมมองจากด้านบน) <span class="muted small" id="mapNote"></span></summary>
       <div class="map-tools">
@@ -280,6 +329,14 @@
     <div class="hint small muted">คีย์ลัด: J/K เลื่อนโซน · A ยอมรับ · R ปฏิเสธ · E แก้ไข</div>
     <div id="zoneCards"></div>
   </aside>
+</main>
+
+<!-- ======================= summary before the report ======================= -->
+<main id="summaryView" class="summary" hidden>
+  <div class="actions left"><button class="btn" id="summaryBack">← กลับไปตรวจผล</button><span class="spacer"></span>
+    <span class="muted small">ออกรายงาน:</span>
+    <a class="btn primary" data-export="report.pdf">PDF</a><a class="btn" data-export="report.docx">Word</a><a class="btn" data-export="report.html">HTML</a></div>
+  <div id="summaryBody"></div>
 </main>
 
 <div id="toast" class="toast" hidden></div>

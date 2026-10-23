@@ -25,7 +25,9 @@ def _fixes(ln: Any) -> list[dict]:
             tr, lat, lon = float(g["trace"]), float(g["lat"]), float(g["lon"])
             if not all(math.isfinite(v) for v in (tr, lat, lon)):
                 continue
-            if tr != int(tr) or not 0 <= tr < ln.raw.n_traces or abs(lat) > 90 or abs(lon) > 180:
+            # Cropped lines retain the fixes just outside the crop to anchor interpolation.
+            outside_uncropped = not ln.raw.metadata.get("crop") and not 0 <= tr < ln.raw.n_traces
+            if tr != int(tr) or outside_uncropped or abs(lat) > 90 or abs(lon) > 180:
                 continue
             if lat == lon == 0:
                 continue
@@ -131,7 +133,10 @@ def survey_scene(job: Any, frame: str = "gps", track: str = "grey") -> dict:
             excluded.append({"line_id": ln.line_id, "source_file": ln.source_file, "reason": reason})
             continue
         # No fabricated GPS position beyond the navigation coverage.
-        lo, hi = (f[0]["trace"], f[-1]["trace"]) if frame == "gps" else (0, r.n_traces - 1)
+        lo, hi = (max(0, f[0]["trace"]), min(r.n_traces - 1, f[-1]["trace"])) if frame == "gps" else (0, r.n_traces - 1)
+        if hi <= lo:
+            excluded.append({"line_id": ln.line_id, "source_file": ln.source_file, "reason": "GPS does not bracket two processed traces"})
+            continue
         cols = np.unique(np.linspace(lo, hi, min(hi - lo + 1, MAX_COLUMNS)).round().astype(int))
         if frame == "gps":
             tr = [v["trace"] for v in f]
@@ -159,6 +164,7 @@ def survey_scene(job: Any, frame: str = "gps", track: str = "grey") -> dict:
         depths = depth_from_time(times[rows], r.velocity_m_per_ns, r.metadata.get("antenna_separation_m") or 0)
         lines.append({"line_id": ln.line_id, "source_file": ln.source_file,
                       "trace_indices": cols.tolist(), "sample_indices": rows.tolist(),
+                      "source_trace_indices": (cols + getattr(ln, "trace_offset", 0)).tolist(),
                       "time_ns": times[rows].round(6).tolist(), "depth_m": depths.round(6).tolist(),
                       "xy_m": xy.round(5).tolist(), "latlon": latlon,
                       "navigation": "GPS interpolated between fixes" if frame == "gps" else "manual straight line",

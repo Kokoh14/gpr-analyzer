@@ -120,7 +120,7 @@ def test_app_scene_and_layout_survive_restart(tmp_path):
     from fastapi.testclient import TestClient
     from gpr_analyzer.app.server import create_app
 
-    client = TestClient(create_app(tmp_path / "jobs"))
+    client = TestClient(create_app(tmp_path / "jobs", background=False))
     result = client.post("/api/demo")
     assert result.status_code == 200
     jid = result.json()["job_id"]
@@ -132,7 +132,7 @@ def test_app_scene_and_layout_survive_restart(tmp_path):
     assert client.get(url + "?frame=local").json()["lines"] == []
     layout = {"lines": {"L1": {"start": [0, 0], "end": [20, 0]}}}
     assert client.put(url + "/layout", json=layout).status_code == 200
-    client = TestClient(create_app(tmp_path / "jobs"))
+    client = TestClient(create_app(tmp_path / "jobs", background=False))
     restored = client.get(url + "?frame=local").json()
     assert restored["lines"][0]["xy_m"][-1] == [20, 0]
     assert restored["excluded"][0]["line_id"] == "L2"
@@ -140,3 +140,24 @@ def test_app_scene_and_layout_survive_restart(tmp_path):
     assert client.get("/api/jobs/missing/scene3d").status_code == 404
     for resource in ["three.module.min.js", "three.core.min.js", "OrbitControls.js", "LICENSE.txt"]:
         assert client.get("/static/vendor/three/" + resource).status_code == 200
+
+
+def test_cropped_navigation_keeps_outside_bracketing_fixes_and_file_traces(tmp_path):
+    from gpr_analyzer.app.jobs import crop_to_range
+
+    gps = [{"trace": 0, "lat": 13, "lon": 100}, {"trace": 40, "lat": 13, "lon": 100.0004}]
+    full = Radargram(np.ones((20, 41)), 0.5, 0.1, 0.12, {"gps": gps})
+    cropped, offset = crop_to_range(full, 1, 3)
+    ln = line(gps=gps)
+    ln.raw = cropped
+    ln.trace_offset = offset
+    ln.result.analysis = cropped.copy_with()
+    ln.result.envelope = cropped.copy_with()
+    ln.result.viewpoint = cropped.copy_with()
+    scene = scene3d.survey_scene(job(tmp_path, [ln]))
+    assert len(scene["lines"]) == 1
+    out = scene["lines"][0]
+    assert out["trace_indices"][0] == 0 and out["source_trace_indices"][0] == 10
+    assert out["source_trace_indices"][-1] == 30
+    assert out["latlon"][0] == pytest.approx([13, 100.0001])
+    assert out["latlon"][-1] == pytest.approx([13, 100.0003])

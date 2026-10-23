@@ -14,7 +14,21 @@ A small FastAPI server on the user's own computer plus one HTML/JS page (`gpr_an
 Nothing is uploaded anywhere else. It answers the "desktop app or web app" question with both: it is
 started like a program, and the screen is a web page.
 
-Flow: drop several files (pairs such as `.iprh + .iprb`, `.rad + .rd3`, `.HD + .DT1`, plus `.txt` with the
+Flow: choose the data folder (system folder dialog, or the in-page browser `/api/fs`) → completeness check
+(`app/folders.py`, headers and side files only: pairs present, whole traces, LAST TRACE, GPS coverage, gaps and
+length, markers) with a rough map of the tracks → tick lines and optionally a distance range per line → the job
+reads the files in place (nothing is copied). Dropping files still works (they are copied into `uploads/`).
+
+Processing runs in a background thread, one line after another. The page polls `/api/jobs/<id>/progress` and
+shows each file's stage (read, each processing step, detection, checkpoint); `log.txt` in the job folder gets a
+line per stage and a summary per line (zones by type, suspicious void-like zones with position and depth).
+Each finished line is pickled to `checkpoints/<line>.pkl` (raw, display tracks, automatic zones), so reopening
+a job needs no reprocessing, and a job cut off by a crash or power failure shows as interrupted and continues
+with the unfinished files (`/resume`). A checkpoint is redone if its source file changed. With a distance range
+only those traces are processed; trace numbers on screen count from the start of the range, distances in
+metres (axis, zones, report, reference matching) from the start of the line.
+
+Older flow, still supported: drop several files (pairs such as `.iprh + .iprb`, `.rad + .rd3`, `.HD + .DT1`, plus `.txt` with the
 same name) → each line is read, processed (`processing.run_pipeline`) and scanned (`detect.analyze_line`)
 automatically → review screen.
 
@@ -39,6 +53,20 @@ Jobs are saved to `<workdir>/<job>/state.json` after every change (info, per-lin
 comparison data). The start page lists earlier jobs; opening one re-reads its uploads, reprocesses with the
 saved options and puts the zones and reviews back. Reprocessing a line clears its reviews (they stay in the
 labels file).
+
+## Before the report
+
+- **Sections not used**: drag on a radargram (✂) to mark a distance range whose results are not used (bad data,
+  parked car, outside the survey area) with a reason. Zones whose centre falls inside are left out of the report,
+  and the range is hatched in the figures as "section excluded by the reviewer". Undo by removing the section.
+- **Line status**: pending / approved (use in the report) / needs reprocessing, with a note.
+- **Reprocessing keeps the review**: zones drawn by the reviewer stay, and an accept / reject / edit on an old
+  automatic zone moves to the new zone covering the same place (box overlap ≥ 0.5). Unmatched decisions are
+  listed in the `reprocess` label record.
+- **Summary before the report** (`/api/jobs/<id>/summary`): what is still open (unreviewed zones, lines not
+  approved, default velocity, no GPS, missing job info, unfinished processing), job info, the zones that need
+  action (levels E / 1 / 2) with distance, depth and coordinates, and a table per line; report buttons on the
+  same page. All of these decisions go to `labels.jsonl`.
 
 ## Map (top view)
 

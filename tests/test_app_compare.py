@@ -60,7 +60,7 @@ def test_matching_counts_and_overrides():
 
 def test_api_compare_flow_and_reopen(tmp_path):
     root = tmp_path / "jobs"
-    c = TestClient(create_app(root))
+    c = TestClient(create_app(root, background=False))
     j = c.post("/api/demo").json()
     jid, ln = j["job_id"], j["lines"][0]
     z = ln["zones"][0]
@@ -90,7 +90,7 @@ def test_api_compare_flow_and_reopen(tmp_path):
     c.post(f"/api/jobs/{jid}/lines/L1/zones/{z['zone_id']}/review", json={"action": "reject"})
 
     # a new app on the same folder (= the program was closed and opened again)
-    c2 = TestClient(create_app(root))
+    c2 = TestClient(create_app(root, background=False))
     listed = c2.get("/api/jobs").json()
     assert listed[0]["job_id"] == jid and listed[0]["compare"]["n_ref"] == 2
     j2 = c2.get(f"/api/jobs/{jid}").json()

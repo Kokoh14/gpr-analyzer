@@ -39,11 +39,8 @@ Isosurfaces, interpreted pipe drawing, terrain correction and 3D migration are l
 
 ## Reference evidence
 
-Installer supplied by user: `G:\My Drive\AI Lead Project\GPR AI\Sample program\GPRSliceInstaller.exe`.
-REA static resource inventory only: PE32, 241311456 bytes, SHA256
-`6c1dcda8e68fe434f6921717b5aa96cc1fc12256fd56abd54047729657befa7d`, Evidence
-`ev_d78a51c018da8e0475aa8cf6c0802b9a2e69225639463dcab1d0e753296c9c7d`.
-No vendor code was decompiled or copied and the installer was not executed.
+The visual reference is the supplied GPR-SLICE screenshots. This viewer is implemented independently
+using this project's processed radargrams and navigation. No vendor code or imagery is included.
 
 ## Verification
 
@@ -57,7 +54,7 @@ Completed on Windows, Python 3.12.14, Chrome with software WebGL (SwiftShader):
 | R4 | API and browser verify local start/end persistence and reopening; invalid layouts leave the saved layout unchanged. |
 | R5 | Browser QA verifies a real curtain raycast, the corresponding 2D trace cursor, and PNG/JSON downloads. |
 | R6 | Nonzero antenna separation tested against core.depth_from_time; disabled time-zero without header reference excludes the line explicitly. |
-| R7 | Full suite: 210 passed, 6 skipped before the final time-zero test addition. Final targeted scene suite: 13 passed. Five real-survey tests require GPR_REAL_DATA; one optional PDF inspection test requires pypdf. No real survey was tested in this run. |
+| R7 | After integration with main 62ce567: full suite 219 passed, 6 skipped. Browser QA passed against the integrated app, including its background-processing flow. Five real-survey tests require GPR_REAL_DATA; one optional PDF inspection test requires pypdf. No real survey was tested in this run. |
 
 Commands:
 
@@ -80,7 +77,9 @@ their previously identified antenna-separation consistency question is a separat
 
 ## Handoff
 
-Branch `codex/3d-mode-1` is a local implementation based on main 2fb9bae. No remote branch or PR
-has been published. Team review should start with scene3d.py and the requirement table above, then run
+Branch `codex/3d-mode-1` was started from main 2fb9bae and integrated with main 62ce567 before the PR.
+The synthetic demo uses the shared background-processing flow. Cropped lines retain bracketing GPS
+fixes and expose both processed and source-file trace indices. Team review should start with
+scene3d.py and the requirement table above, then run
 the app with a real survey (raw files plus navigation) and check track direction/time-zero/velocity.
 For long/multichannel surveys, verify navigation conventions and display budgets before expanding limits.

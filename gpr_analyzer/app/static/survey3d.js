@@ -291,8 +291,9 @@ function pick(event, select) {
   const line = hit.object.userData.line, col = Math.max(0, Math.min(line.xy_m.length - 1, hit.uv.x * (line.xy_m.length - 1)));
   const row = Math.max(0, Math.min(line.depth_m.length - 1, (1 - hit.uv.y) * (line.depth_m.length - 1)));
   const trace = Math.round(lerpArray(line.trace_indices, col)), d = lerpArray(line.depth_m, row), t = lerpArray(line.time_ns, row);
+  const sourceTrace = Math.round(lerpArray(line.source_trace_indices || line.trace_indices, col));
   const east = lerpArray(line.xy_m.map((p) => p[0]), col), north = lerpArray(line.xy_m.map((p) => p[1]), col);
-  $("s3Readout").textContent = `${line.line_id} / ${line.source_file} · trace ${trace} · E ${number(east)} N ${number(north)} m · depth ${number(d)} m · ${number(t)} ns`;
+  $("s3Readout").textContent = `${line.line_id} / ${line.source_file} · trace ${trace}${sourceTrace !== trace ? ` (file ${sourceTrace})` : ""} · E ${number(east)} N ${number(north)} m · depth ${number(d)} m · ${number(t)} ns`;
   if (select) {
     state.selected = line.line_id; visibility();
     window.dispatchEvent(new CustomEvent("gpr:3d-pick", { detail: { line: line.line_id, trace, depth: d, time: t } }));
@@ -354,7 +355,7 @@ card.addEventListener("toggle", () => { if (card.open) { state.data ? (resize(),
 
 function onJob({ job, line }) {
   if (!job) return;
-  const signature = JSON.stringify([job.job_id, job.lines.map((l) => [l.line_id, l.n_samples, l.velocity_m_per_ns, l.options])]);
+  const signature = JSON.stringify([job.job_id, job.lines.map((l) => [l.line_id, l.n_samples, l.n_traces, l.trace_offset, l.crop, l.velocity_m_per_ns, l.options])]);
   if (state.job?.job_id !== job.job_id) { state.hidden.clear(); state.data = null; $("s3Frame").value = "gps"; }
   state.job = job; state.selected = line;
   if (state.signature !== signature) { state.signature = signature; load(); } else visibility();
