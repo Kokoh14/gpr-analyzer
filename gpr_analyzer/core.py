@@ -8,6 +8,28 @@ from typing import Any
 import numpy as np
 
 
+def depth_from_time(t_ns, velocity_m_per_ns: float, separation_m: float = 0.0):
+    """Reflector depth (m) for two-way time t_ns measured from the direct ground wave.
+
+    Transmitter and receiver are separation_m apart; at t = 0 the wave has only crossed the
+    separation, so depth is 0. Negative times give negative depths (v t / 2).
+    """
+    t = np.asarray(t_ns, dtype=np.float64)
+    h = velocity_m_per_ns * t / 2.0
+    if not separation_m:
+        return h
+    s = separation_m / 2.0
+    return np.where(h > 0, np.sqrt(np.maximum((h + s) ** 2 - s**2, 0.0)), h)
+
+
+def time_from_depth(depth_m, velocity_m_per_ns: float, separation_m: float = 0.0):
+    """Inverse of depth_from_time."""
+    d = np.asarray(depth_m, dtype=np.float64)
+    s = separation_m / 2.0
+    h = np.where(d > 0, np.sqrt(d**2 + s**2) - s, d)
+    return 2.0 * h / velocity_m_per_ns
+
+
 @dataclass
 class Radargram:
     """One GPR profile (B-scan).
@@ -45,9 +67,14 @@ class Radargram:
         return np.arange(self.n_samples, dtype=np.float64) * self.dt_ns
 
     def depth_axis(self, velocity_m_per_ns: float | None = None) -> np.ndarray:
-        """Depth of each sample in metres: v * t / 2 (two-way time)."""
+        """Depth of each sample in metres (row 0 = time zero).
+
+        Without antenna separation this is v * t / 2. With metadata["antenna_separation_m"] = S the
+        bistatic geometry is used, row 0 being the direct ground wave (depth 0):
+        depth = sqrt((v t / 2 + S / 2)^2 - (S / 2)^2). This is what ViewPoint's depth axis shows.
+        """
         v = self.velocity_m_per_ns if velocity_m_per_ns is None else velocity_m_per_ns
-        return self.time_axis() * v / 2.0
+        return depth_from_time(self.time_axis(), v, self.metadata.get("antenna_separation_m") or 0.0)
 
     def distance_axis(self) -> np.ndarray:
         """Position of each trace along the line in metres, or trace index if dx_m is unknown."""

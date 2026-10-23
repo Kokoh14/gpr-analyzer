@@ -1,0 +1,25 @@
+name: windows
+
+# Checks the double-click launcher and the test suite on a real Windows machine.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Launcher smoke test (install into a fresh environment, start, open the demo, export a PDF)
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File windows\launch.ps1 -SmokeTest -Port 8799
+      - name: Tests
+        shell: pwsh
+        run: |
+          python -m pip install -e ".[dev,app]"
+          python -m pytest -q
