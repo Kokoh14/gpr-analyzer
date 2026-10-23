@@ -202,17 +202,18 @@
     <details class="card mapcard" id="mapCard" open>
       <summary>แผนที่ (มุมมองจากด้านบน) <span class="muted small" id="mapNote"></span></summary>
       <div class="map-tools">
-        <label class="slider">ความลึก <input type="range" id="sliceDepth" min="0" max="39" value="6"> <b id="sliceDepthLbl"></b></label>
-        <label class="slider">ซ่อนค่าต่ำกว่า <input type="range" id="sliceThr" min="-40" max="0" value="-40"> <b id="sliceThrLbl"></b></label>
+        <label>แสดง <select id="mapMode"><option value="energy">พลังงานสะท้อน (dB)</option><option value="dielectric">ค่า dielectric (εr)</option></select></label>
+        <label class="slider" id="sliceThrBox">ซ่อนค่าต่ำกว่า <input type="range" id="sliceThr" min="-40" max="0" value="-40"> <b id="sliceThrLbl"></b></label>
         <label>สี <select id="sliceCmap"><option value="jet">Jet</option><option value="hot">Hot</option><option value="grey">ขาวดำ</option></select></label>
         <label class="toggle"><input type="checkbox" id="mapZones" checked> โซน</label>
         <label class="toggle"><input type="checkbox" id="mapAll" checked> ทุกเส้น</label>
         <button class="btn ghost small" id="mapFit" title="ซูมให้เห็นเส้นนี้ทั้งเส้น">⤢ พอดีเส้น</button>
       </div>
-      <div class="mapwrap"><div id="map"></div><div class="map-msg" id="mapMsg" hidden></div></div>
-      <div class="map-legend small muted"><span id="sliceLegend"></span>
-        สี = พลังงานสะท้อนที่ความลึกที่เลือก เทียบกับค่าสูงสุดของเส้น (dB) ใช้ดูตำแหน่ง ไม่ใช่ความน่าจะเป็น ·
-        คลิกบนแผนที่เพื่อไปยังตำแหน่งนั้นในภาพตัดขวาง · คลิกบนภาพตัดขวางเพื่อเลือกความลึก</div>
+      <div class="mapwrap"><div id="map"></div><div class="map-msg" id="mapMsg" hidden></div>
+        <div class="depthbar" title="เลื่อนลงเพื่อดูลึกขึ้นจากระดับผิวดิน"><span class="small">ผิวดิน 0 m</span>
+          <input type="range" id="sliceDepth" min="0" max="39" value="6" aria-label="ความลึกจากผิวดิน"><b id="sliceDepthLbl"></b></div></div>
+      <div class="map-legend small muted"><span id="sliceLegend"></span> <span id="mapHelp"></span>
+        · คลิกบนแผนที่เพื่อไปยังตำแหน่งนั้นในภาพตัดขวาง · คลิกบนภาพตัดขวางเพื่อเลือกความลึก</div>
     </details>
 
     <div class="zoombar">
