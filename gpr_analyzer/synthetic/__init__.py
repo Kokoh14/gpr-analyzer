@@ -8,7 +8,7 @@ from gpr_analyzer.synthetic.generator import (
     make_scene,
     ricker,
     single_hyperbola,
-    subscan_like_line,
+    field_like_line,
 )
 
-__all__ = ["Cavity", "Layer", "PointTarget", "SyntheticTruth", "make_scene", "ricker", "single_hyperbola", "subscan_like_line"]
+__all__ = ["Cavity", "Layer", "PointTarget", "SyntheticTruth", "make_scene", "ricker", "single_hyperbola", "field_like_line"]

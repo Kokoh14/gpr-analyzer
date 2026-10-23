@@ -1,6 +1,6 @@
 """Compare this program's zones with a licensed program's result on the same line.
 
-The licensed programs (SubScan, GeoLitix, ...) are treated as black boxes: we only read what the
+The reference programs (ImpulseRadar ViewPoint and GeoLitix) are treated as black boxes: we only read what the
 user exports or types in from them, never their files or code. For each line the user can keep
 
 - reference images (screenshots or exported radargram pictures), shown beside our views;
@@ -21,7 +21,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-SOURCES = {"subscan": "SubScan", "geolitix": "GeoLitix", "other": "อื่น ๆ"}
+SOURCES = {"viewpoint": "ViewPoint", "geolitix": "GeoLitix"}
+# Older saved jobs used these names; they are read as ViewPoint (the software of the user's ImpulseRadar unit).
+LEGACY_SOURCES = {"subscan": "viewpoint", "other": "viewpoint"}
 REF_VERDICTS = ("match", "partial", "missed", "unsure")  # for a reference pick
 ZONE_VERDICTS = ("extra_real", "extra_false", "unsure")  # for a zone only we found
 META_FIELDS = ("n_traces", "time_window_ns", "length_m", "velocity_m_per_ns", "max_depth_m")
@@ -48,7 +50,24 @@ DEFAULT_FEATURES = [
 
 def new_state() -> dict[str, Any]:
     return {"tolerance": dict(DEFAULT_TOLERANCE), "lines": {},
-            "features": [{"feature": f, "source": "subscan", "rating": "untested", "note": ""} for f in DEFAULT_FEATURES]}
+            "features": [{"feature": f, "source": "viewpoint", "rating": "untested", "note": ""} for f in DEFAULT_FEATURES]}
+
+
+def upgrade_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Rename reference sources that are no longer offered (see LEGACY_SOURCES) in a saved state."""
+    def fix(d: dict[str, Any]) -> None:
+        if d.get("source") in LEGACY_SOURCES:
+            d["source"] = LEGACY_SOURCES[d["source"]]
+    for f in state.get("features", []):
+        fix(f)
+    for ls in state.get("lines", {}).values():
+        for item in ls.get("picks", []) + ls.get("images", []):
+            fix(item)
+        meta = ls.get("meta", {})
+        for old, new in LEGACY_SOURCES.items():
+            if old in meta:
+                meta.setdefault(new, meta.pop(old))
+    return state
 
 
 def line_state(state: dict[str, Any], line_id: str) -> dict[str, Any]:
@@ -81,7 +100,7 @@ class LineGeom:
 
 def clean_pick(d: dict[str, Any], ref_id: str) -> dict[str, Any]:
     """Validate a pick from the form, CSV or a drawn box."""
-    src = d.get("source", "other")
+    src = LEGACY_SOURCES.get(d.get("source"), d.get("source") or "viewpoint")
     if src not in SOURCES:
         raise ValueError(f"source must be one of {', '.join(SOURCES)}")
     x_unit, y_unit = d.get("x_unit", "m"), d.get("y_unit", "m")

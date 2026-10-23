@@ -3,7 +3,7 @@
 Several formats come as a pair (ImpulseRadar .iprh + .iprb, MALA .rad + .rd3, S&S .HD + .DT1).
 The readers find the partner next to the file they are given, so every upload goes into one
 folder with its original name and each pair is read once, from its header file.
-Anything else (.txt notes, .cor GPS, unknown binaries such as SubScan) is kept as a companion
+Anything else (.txt notes, .cor GPS, .mrk markers, unknown binaries) is kept as a companion
 and attached to the line with the same file stem.
 """
 
@@ -82,7 +82,7 @@ def preview_text(path: Path, limit: int = 4000) -> str | None:
     if path.suffix.lower() not in TEXT_EXTENSIONS:
         return None
     raw = path.read_bytes()[:limit]
-    for enc in ("utf-8", "cp1254", "latin-1"):  # cp1254 = Turkish Windows (SubScan exports)
+    for enc in ("utf-8", "cp874", "latin-1"):  # cp874 = Thai Windows
         try:
             return raw.decode(enc)
         except UnicodeDecodeError:

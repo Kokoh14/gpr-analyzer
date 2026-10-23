@@ -14,7 +14,7 @@ def test_dispatch_by_extension_case_insensitive(tmp_path):
 
 
 def test_unknown_extension(tmp_path):
-    p = tmp_path / "x.subscan"
+    p = tmp_path / "x.unknownfmt"
     p.write_bytes(b"\x00" * 10)
     with pytest.raises(ValueError, match="unsupported"):
         read(p)

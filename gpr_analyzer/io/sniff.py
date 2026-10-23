@@ -1,4 +1,4 @@
-"""Find the layout of an unknown binary GPR file (used for the SubScan format, clean-room).
+"""Find the layout of an unknown binary GPR file (clean-room: only our own files are read).
 
 Only our own data files are examined; no vendor code is read. The tool:
 1. lists readable text in the file (header fields, device name, dates)

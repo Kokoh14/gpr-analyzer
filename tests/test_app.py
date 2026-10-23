@@ -21,14 +21,14 @@ def client(tmp_path):
 
 
 def test_sort_files_pairs_and_companions(tmp_path):
-    names = ["A.iprh", "A.iprb", "A.txt", "B.HD", "B.DT1", "orphan.txt", "subscan.dat"]
+    names = ["A.iprh", "A.iprb", "A.txt", "B.HD", "B.DT1", "orphan.txt", "mystery.dat"]
     paths = [tmp_path / n for n in names]
     s = sort_files(paths)
     prim = {g.primary.name for g in s.groups}
     assert prim == {"A.iprh", "B.HD"}
     a = next(g for g in s.groups if g.stem == "A")
     assert [p.name for p in a.companions] == ["A.txt"]
-    assert {p.name for p in s.unassigned} == {"orphan.txt", "subscan.dat"}
+    assert {p.name for p in s.unassigned} == {"orphan.txt", "mystery.dat"}
     assert safe_name("..\\..\\evil/../x y.iprb") == "x y.iprb"
 
 
@@ -39,7 +39,7 @@ def test_upload_review_labels_export(client, tmp_path):
     j = client.post("/api/jobs", files=up).json()
     jid = j["job_id"]
     assert [ln["source_file"] for ln in j["lines"]] == ["DEMO_LINE01.iprh", "DEMO_LINE02.iprh"]
-    assert j["lines"][0]["companions"][0]["name"] == "DEMO_LINE01.txt"
+    assert {c["name"] for c in j["lines"][0]["companions"]} == {"DEMO_LINE01.cor", "DEMO_LINE01.txt"}
     assert any(p["file"] == "mystery.dat" and p["error"] == "unknown_format" for p in j["problems"])
     assert j["draft"] is True
     ln = j["lines"][0]

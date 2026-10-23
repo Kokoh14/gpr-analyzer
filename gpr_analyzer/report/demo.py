@@ -1,6 +1,6 @@
 """Mock survey for report previews and tests.
 
-Modelled on the SubScan sample line (555 traces, ~145 ns window, v ≈ 0.135 m/ns): a weak layer,
+Modelled on an early sample line (555 traces, ~145 ns window, v ≈ 0.135 m/ns): a weak layer,
 a scattered strong-reflection zone at ~5–7.5 m, one point target hyperbola and full-depth
 vertical stripes that should be flagged as artifacts. The data is synthetic, not a real survey.
 """

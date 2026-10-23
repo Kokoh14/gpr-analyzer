@@ -8,9 +8,9 @@
 GPR software stores the sample interval inconsistently: the standard unit is microseconds but GPR
 intervals are well below 1 us (the smallest integer the field can hold), so GPR programs write picoseconds
 instead. `dt_unit="auto"` therefore reads the field as picoseconds; pass dt_unit="us" for a true seismic file.
-Which unit SubScan or the user's other software writes is still to be confirmed with a real export.
+Which unit other GPR software writes is still to be confirmed with a real export.
 
-Not yet validated against SEG-Y exported by SubScan or other GPR software.
+Not yet validated against SEG-Y exported by other GPR software.
 """
 
 from __future__ import annotations

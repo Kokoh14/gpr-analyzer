@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPR Analyzer</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -103,11 +104,38 @@
         <button class="btn" id="drawBtn" title="ลากกรอบบนภาพใดก็ได้เพื่อเพิ่มโซนที่โปรแกรมไม่ได้วง">＋ วาดโซนใหม่</button>
       </div>
     </div>
+    <details class="card mapcard" id="mapCard" open>
+      <summary>แผนที่ (มุมมองจากด้านบน) <span class="muted small" id="mapNote"></span></summary>
+      <div class="map-tools">
+        <label class="slider">ความลึก <input type="range" id="sliceDepth" min="0" max="39" value="6"> <b id="sliceDepthLbl"></b></label>
+        <label class="slider">ซ่อนค่าต่ำกว่า <input type="range" id="sliceThr" min="-40" max="0" value="-40"> <b id="sliceThrLbl"></b></label>
+        <label>สี <select id="sliceCmap"><option value="jet">Jet</option><option value="hot">Hot</option><option value="grey">ขาวดำ</option></select></label>
+        <label class="toggle"><input type="checkbox" id="mapZones" checked> โซน</label>
+        <label class="toggle"><input type="checkbox" id="mapAll" checked> ทุกเส้น</label>
+        <button class="btn ghost small" id="mapFit" title="ซูมให้เห็นเส้นนี้ทั้งเส้น">⤢ พอดีเส้น</button>
+      </div>
+      <div class="mapwrap"><div id="map"></div><div class="map-msg" id="mapMsg" hidden></div></div>
+      <div class="map-legend small muted"><span id="sliceLegend"></span>
+        สี = พลังงานสะท้อนที่ความลึกที่เลือก เทียบกับค่าสูงสุดของเส้น (dB) ใช้ดูตำแหน่ง ไม่ใช่ความน่าจะเป็น ·
+        คลิกบนแผนที่เพื่อไปยังตำแหน่งนั้นในภาพตัดขวาง · คลิกบนภาพตัดขวางเพื่อเลือกความลึก</div>
+    </details>
+
+    <div class="zoombar">
+      <span class="small muted">ซูมภาพตัดขวาง (ทุกภาพพร้อมกัน):</span>
+      <button class="btn ghost small" data-zoom="in" title="ซูมเข้า">＋</button>
+      <button class="btn ghost small" data-zoom="out" title="ซูมออก">－</button>
+      <button class="btn ghost small" data-zoom="box" title="ลากกรอบบริเวณที่ต้องการซูม">⬚ ลากกรอบซูม</button>
+      <button class="btn ghost small" data-zoom="reset" title="เต็มเส้น">⟲ เต็มเส้น</button>
+      <span class="small muted" id="zoomInfo"></span>
+      <span class="spacer"></span>
+      <span class="small muted">ภาพที่แสดง:</span><span id="viewToggles" class="view-toggles"></span>
+    </div>
+    <div class="hint small muted">หมุนล้อเมาส์ = ซูม (กด Shift ค้างไว้ = ซูมเฉพาะแนวระยะ) · ลากภาพ = เลื่อน · ดับเบิลคลิก = เต็มเส้น</div>
     <div class="readout" id="readout">ชี้บนภาพเพื่อดูตำแหน่ง</div>
     <div id="panes"></div>
 
     <details class="compare card" id="compare" open>
-      <summary>เทียบกับซอฟต์แวร์อ้างอิง (SubScan / GeoLitix) <span class="muted" id="cmpNote"></span></summary>
+      <summary>เทียบกับซอฟต์แวร์อ้างอิง (ViewPoint / GeoLitix) <span class="muted" id="cmpNote"></span></summary>
       <p class="muted small">ใช้ผลจากซอฟต์แวร์ลิขสิทธิ์เป็นคำตอบอ้างอิงเท่านั้น: แนบภาพหน้าจอหรือภาพที่ส่งออก นำเข้าตารางจุดที่มาร์กไว้ (CSV)
         หรือวาดกรอบบนภาพของเราตรงตำแหน่งที่ซอฟต์แวร์นั้นมาร์ก แล้วโปรแกรมจะจับคู่กับโซนของเราให้ ตัดสินเองได้ทุกแถว</p>
       <div class="cmp-bar">
@@ -209,6 +237,7 @@
 </main>
 
 <div id="toast" class="toast" hidden></div>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
