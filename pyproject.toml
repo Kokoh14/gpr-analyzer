@@ -15,17 +15,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "httpx>=0.24"]
+# local upload/review screen: gpr-analyzer-app
+app = ["fastapi>=0.110", "uvicorn>=0.23", "python-multipart>=0.0.9"]
 
 [project.scripts]
 gpr-sniff = "gpr_analyzer.io.sniff:main"
 gpr-analyzer = "gpr_analyzer.cli:main"
+gpr-analyzer-app = "gpr_analyzer.app:main"
 
 [tool.setuptools.packages.find]
 include = ["gpr_analyzer*"]
 
 [tool.setuptools.package-data]
 "gpr_analyzer.report" = ["fonts/*.ttf", "fonts/OFL.txt"]
+"gpr_analyzer.app" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
