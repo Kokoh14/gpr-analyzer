@@ -118,3 +118,52 @@ def test_read_cor_skips_junk(tmp_path):
     p = tmp_path / "x.cor"
     p.write_text("garbage\n\n3\td\tt\t1\tN\t2\tE\n")
     assert read_cor(p) == [{"trace": 3, "date": "d", "time": "t", "lat": 1.0, "lon": 2.0}]
+
+
+def test_measured_distance_interval_wins_over_user_setting(tmp_path):
+    make_ir(tmp_path, traces=5)
+    p = tmp_path / "DAT_0001_A1.iprh"
+    p.write_text(p.read_text().replace("DISTANCE INTERVAL: 0.050000\nUSER", "DISTANCE INTERVAL: 0.018615\nUSER")
+                 .replace("USER DISTANCE INTERVAL: 0.050000", "USER DISTANCE INTERVAL: 0.020000"))
+    (r,) = read_impulseradar(p)
+    assert r.dx_m == pytest.approx(0.018615)
+
+
+def test_header_values_for_depth_and_time_zero(tmp_path):
+    make_ir(tmp_path)
+    p = tmp_path / "DAT_0001_A1.iprh"
+    p.write_text(p.read_text().replace("ZERO LEVEL: 0", "ZERO LEVEL: 3"))
+    (r,) = read_impulseradar(p)
+    assert r.metadata["antenna_frequency_mhz"] == 450.0
+    assert r.metadata["antenna_separation_m"] == pytest.approx(0.17)
+    assert r.metadata["zero_level_sample"] == 3
+
+
+def test_dual_channel_shares_line_cor(tmp_path):
+    for ch in "01":
+        make_ir(tmp_path, name=f"LINE_0001_{ch}")
+    (tmp_path / "LINE_0001.cor").write_text("1\t2026-10-22\t10:00:00:000\t10.25\tN\t20.5\tE\t1.0\tM\t5\n")
+    for ch in "01":
+        (r,) = read_impulseradar(tmp_path / f"LINE_0001_{ch}.iprh")
+        assert r.metadata["gps"][0]["lat"] == pytest.approx(10.25)
+
+
+def test_markers_from_mrk(tmp_path):
+    make_ir(tmp_path, name="LINE_0001_0")
+    (tmp_path / "LINE_0001_0.mrk").write_text(
+        "HEADER VERSION:300\n"
+        "3\t5\tAPWA\t#EE3023\t2\t\t10.5\tN\t20.25\tE\t1.0\tM\t4\tN\t00000000-1111-2222-3333-444444444444\n"
+        "junk\n"
+    )
+    (r,) = read_impulseradar(tmp_path / "LINE_0001_0.iprh")
+    (m,) = r.metadata["markers"]
+    assert (m["trace"], m["sample"], m["type"], m["colour"]) == (3, 5, "APWA", "#EE3023")
+    assert m["lat"] == pytest.approx(10.5) and m["lon"] == pytest.approx(20.25)
+    assert m["id"].startswith("00000000")
+
+
+def test_empty_data_file_is_a_clear_error(tmp_path):
+    make_ir(tmp_path)
+    (tmp_path / "DAT_0001_A1.iprb").write_bytes(b"")
+    with pytest.raises(ValueError, match="no complete trace"):
+        read_impulseradar(tmp_path / "DAT_0001_A1.iprh")

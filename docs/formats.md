@@ -3,13 +3,14 @@
 Every reader returns `list[Radargram]` (one per channel). `gpr_analyzer.io.read(path)` picks the reader
 from the extension.
 
-**Validation status: all readers are tested only against small fixture files built from the public
-format descriptions. None has been checked against a real file yet.** Each needs one real file and a
-comparison with the vendor software (trace count, samples, time window, a plotted radargram).
+**Validation status:** ImpulseRadar is checked on a real CrossOver 4080 survey against ViewPoint's own
+screenshots ([viewpoint-fit.md](viewpoint-fit.md)). The other readers are tested only against small fixture
+files built from the public format descriptions; each needs one real file and a comparison with the vendor
+software (trace count, samples, time window, a plotted radargram).
 
 | Format | Extensions | Source of the layout | Notes / open points |
 |---|---|---|---|
-| ImpulseRadar | `.iprh` + `.iprb` (+ `.cor`) | CrossOver Data Files Formats v1.1 (public) | int16/int32 from `DATA VERSION`; trace count from file size (not `LAST TRACE`); `_0` = high, `_1` = low frequency channel; `FREQUENCY` read as sampling frequency in MHz. Confirm on the user's unit. |
+| ImpulseRadar | `.iprh` + `.iprb` (+ `.cor`) | CrossOver Data Files Formats v1.1 (public) | int16/int32 from `DATA VERSION`; trace count from file size (not `LAST TRACE`); `_0` = high, `_1` = low frequency channel; `FREQUENCY` read as sampling frequency in MHz. Checked on real files: trace spacing from `DISTANCE INTERVAL` (`USER DISTANCE INTERVAL` is only the requested value); `<line>.cor` shared by both channels; `.mrk` markers; `ZERO LEVEL` = time zero; `ANTENNA SEPARATION` used for depth. |
 | MALA | `.rad` + `.rd3` / `.rd7` | Same layout as ImpulseRadar | `.rd3` int16, `.rd7` int32. |
 | GSSI | `.dzt` | Public DZT header description (readgssi is GPL: reference only) | 1024-byte header per channel; 8/16-bit unsigned, 32-bit signed; `dt = range / samples`; velocity from `rhf_epsr`. Newer DZT files with GPS/extra blocks not tested. |
 | Sensors & Software | `.hd` + `.dt1` | Public pulseEKKO description | 128-byte trace header (32 float32) before each trace; int16 (int32 detected from size); `dt = window / (points - 1)`. |

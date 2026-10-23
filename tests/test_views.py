@@ -11,7 +11,7 @@ def result():
     return run_pipeline(rg)
 
 
-def test_render_three_views_with_legends(result):
+def test_render_views_with_legends(result):
     figs = render_views(result)
     assert tuple(figs) == VIEWS
     env_fig = figs["envelope"]
