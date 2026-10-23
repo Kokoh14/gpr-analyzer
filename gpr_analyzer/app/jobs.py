@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import io
 import json
+import pickle
 import threading
+import time
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -90,19 +92,30 @@ class LineState:
     zones: list[Zone] = field(default_factory=list)
     artifact_regions: list[ArtifactRegion] = field(default_factory=list)
     auto_zones: dict[str, dict[str, Any]] = field(default_factory=dict)  # as proposed, for the labels
+    trace_offset: int = 0  # first trace of the processed range in the file (0 = whole line)
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)  # PNGs and GPS positions
 
     # ------------------------------------------------------------------ processing
-    def process(self) -> None:
-        res = run_pipeline(self.raw, self.options)
+    def process(self, progress: Callable[[str], None] | None = None) -> None:
+        res = run_pipeline(self.raw, self.options, progress=progress)
+        if progress:
+            progress("detect")
         det = analyze_line(res.analysis, velocity_m_per_ns=res.velocity_m_per_ns,
                            velocity_source=res.velocity_source_code)
         zones, regions = to_report_records(det, line_id=self.line_id)
         self.result = res
-        self.zones = [Zone.from_dict(z) for z in zones]
+        off = self.offset_m
+        self.zones = [Zone.from_dict({**z, **({"distance_start_m": z["distance_start_m"] + off,
+                                               "distance_end_m": z["distance_end_m"] + off}
+                                            if off and z.get("distance_start_m") is not None else {})}) for z in zones]
         self.artifact_regions = [ArtifactRegion(**a) for a in regions]
         self.auto_zones = {z.zone_id: z.to_dict() for z in self.zones}
         self._cache.clear()
+
+    @property
+    def offset_m(self) -> float:
+        """Distance of the first processed trace along the whole line (distances in zones are absolute)."""
+        return self.trace_offset * (self.raw.dx_m or 0.0)
 
     @property
     def analysis(self) -> Radargram:
@@ -146,7 +159,9 @@ class LineState:
     def line_result(self) -> LineResult:
         res = self.result
         return LineResult(
-            line_id=self.line_id, source_file=self.source_file, n_traces=res.analysis.n_traces,
+            line_id=self.line_id, source_file=self.source_file + (
+                f" ({self.offset_m:.1f}–{self.offset_m + res.analysis.n_traces * (res.analysis.dx_m or 0):.1f} m)"
+                if self.trace_offset else ""), n_traces=res.analysis.n_traces,
             n_samples=res.analysis.n_samples, dt_ns=res.analysis.dt_ns, trace_spacing_m=res.analysis.dx_m,
             velocity_m_per_ns=res.velocity_m_per_ns, velocity_source=res.velocity_source_code,
             processing=[ProcessingStep(**s) for s in res.report_steps()], zones=[self.with_coords(z) for z in self.zones],
@@ -165,6 +180,7 @@ class LineState:
             "line_id": self.line_id, "source_file": self.source_file, "channel": self.channel,
             "n_traces": a.n_traces, "n_samples": a.n_samples, "dt_ns": a.dt_ns, "dx_m": a.dx_m,
             "time_window_ns": a.n_samples * a.dt_ns, "views": self.views(),
+            "trace_offset": self.trace_offset, "crop": self.raw.metadata.get("crop"),
             "has_gps": self.positions() is not None,
             "velocity_m_per_ns": res.velocity_m_per_ns, "velocity_source": res.velocity_source,
             "velocity_source_code": res.velocity_source_code,
@@ -231,7 +247,12 @@ class Job:
     unassigned: list[dict[str, Any]] = field(default_factory=list)
     created: str = field(default_factory=_now)
     comparison: dict[str, Any] = field(default_factory=cmp.new_state)  # see compare.py
-    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    source_folder: str = ""  # survey read in place from this folder ("" = files uploaded into uploads/)
+    plan: list[dict[str, Any]] = field(default_factory=list)
+    progress: dict[str, Any] = field(default_factory=lambda: {"state": "done"})
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _thread: threading.Thread | None = field(default=None, repr=False)
+    _log_tail: list[str] = field(default_factory=list, repr=False)
 
     @property
     def upload_dir(self) -> Path:
@@ -251,36 +272,188 @@ class Job:
                 return ln
         raise KeyError(line_id)
 
-    # ------------------------------------------------------------------ loading
-    def load(self, paths: list[Path]) -> None:
-        s = sort_files(paths)
-        for g in s.groups:
-            self._load_group(g)
-        self.unassigned = [_companion(p) for p in s.unassigned]
-        for p in s.unassigned:
-            if p.suffix.lower() not in {".txt", ".csv", ".cor", ".gps", ".xml", ".ini", ".json", ".log"}:
-                self.problems.append({"file": p.name, "error": "unknown_format"})
-        if not self.lines and not self.problems:
-            self.problems.append({"file": "", "error": "no_files"})
+    # ------------------------------------------------------------------ loading and processing
+    # A job first gets a plan (one entry per data file, with an optional distance range), then the plan is
+    # processed line by line, in a background thread in the app. Every finished line is written to
+    # checkpoints/<line>.pkl and state.json, and each stage goes to log.txt, so a job cut off by a power
+    # failure or crash reopens with the finished lines and continues with the rest (resume()).
+    def load(self, paths: list[Path], ranges: dict[str, list[float]] | None = None,
+             include: set[str] | None = None) -> None:
+        """Plan and process synchronously (tests, old jobs). The app uses plan_files() + start()."""
+        self.plan_files(paths, ranges, include)
+        self.run_plan()
 
-    def _load_group(self, g: InputGroup) -> None:
-        try:
-            rgs = read_file(g.primary)
-        except Exception as e:  # noqa: BLE001 - reported to the user per file
-            self.problems.append({"file": g.primary.name, "error": f"{type(e).__name__}: {e}"})
+    def plan_files(self, paths: list[Path], ranges: dict[str, list[float]] | None = None,
+                   include: set[str] | None = None) -> None:
+        """ranges / include are keyed by the primary file's full path (as scan_folder reports it)."""
+        s = sort_files(paths)
+        groups = sorted(s.groups, key=lambda g: str(g.primary).lower())
+        if include is not None:
+            groups = [g for g in groups if str(g.primary) in include]
+        self.plan = []
+        for g in groups:
+            r = (ranges or {}).get(str(g.primary))
+            if r is not None:
+                lo, hi = (None if v in (None, "") else float(v) for v in r)
+                r = None if lo is None and hi is None else [lo, hi]
+            self.plan.append({"index": len(self.plan), "primary": str(g.primary), "name": g.primary.name,
+                              "family": g.family, "companions": [str(c) for c in g.companions], "range_m": r,
+                              "state": "waiting", "step": "", "line_ids": [], "error": None})
+        self.unassigned = [_companion(p) for p in s.unassigned]
+        self.problems = [{"file": p.name, "error": "unknown_format"} for p in s.unassigned
+                         if p.suffix.lower() not in {".txt", ".csv", ".cor", ".gps", ".xml", ".ini", ".json", ".log",
+                                                      ".mrk", ".time", ".tmf"}]
+        if not self.plan and not self.problems:
+            self.problems.append({"file": "", "error": "no_files"})
+        self.progress = {"state": "waiting", "started": None, "finished": None}
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        """Process the plan entries that are not done yet, in a background thread."""
+        if self.running:
             return
-        comps = [_companion(p) for p in g.companions]
+        self._thread = threading.Thread(target=self.run_plan, name=f"job-{self.job_id}", daemon=True)
+        self._thread.start()
+
+    def run_plan(self) -> None:
+        todo = [e for e in self.plan if e["state"] != "done"]
+        resumed = len(todo) < len(self.plan)
+        with self.lock:
+            self.progress.update(state="processing", started=_now(), finished=None)
+            self.save()
+        self.log(("ทำต่อ: เหลือ " if resumed else "เริ่มประมวลผล ") + f"{len(todo)} จาก {len(self.plan)} ไฟล์"
+                 + (f" (อ่านจากโฟลเดอร์ {self.source_folder})" if self.source_folder else ""))
+        t0 = time.monotonic()
+        for e in todo:
+            self._process_entry(e)
+        with self.lock:
+            self.progress.update(state="done", finished=_now())
+            if not self.lines and not self.problems:
+                self.problems.append({"file": "", "error": "no_files"})
+            self.save()
+        n_err = sum(e["state"] == "error" for e in self.plan)
+        self.log(f"เสร็จ: {len(self.lines)} เส้น ใช้เวลา {time.monotonic() - t0:.0f} วินาที"
+                 + (f" · อ่านไม่ได้ {n_err} ไฟล์" if n_err else ""))
+
+    def _step(self, e: dict[str, Any], step: str) -> None:
+        e["step"] = step
+        e["steps_done"] = e.get("steps_done", 0) + 1
+
+    def _process_entry(self, e: dict[str, Any]) -> None:
+        primary = Path(e["primary"])
+        e.update(state="reading", step="read", steps_done=0, error=None)
+        self.log(f"[{e['index'] + 1}/{len(self.plan)}] {e['name']}: อ่านไฟล์")
+        try:
+            rgs = read_file(primary)
+        except Exception as ex:  # noqa: BLE001 - reported to the user per file
+            self._entry_failed(e, f"{type(ex).__name__}: {ex}")
+            return
+        comps = [_companion(Path(c)) for c in e["companions"] if Path(c).exists()]
+        ids = []
         for ch, rg in enumerate(rgs):
-            n = len(self.lines) + 1
-            line_id = f"L{n}" if len(rgs) == 1 else f"L{n}-ch{ch + 1}"
-            ln = LineState(line_id=line_id, source_file=g.primary.name, channel=ch + 1 if len(rgs) > 1 else None,
-                           raw=rg, companions=comps)
+            line_id = f"L{e['index'] + 1}" if len(rgs) == 1 else f"L{e['index'] + 1}-ch{ch + 1}"
+            offset = 0
+            if e["range_m"]:
+                try:
+                    rg, offset = crop_to_range(rg, *e["range_m"])
+                except ValueError as ex:
+                    self._entry_failed(e, str(ex))
+                    return
+            ln = LineState(line_id=line_id, source_file=primary.name, channel=ch + 1 if len(rgs) > 1 else None,
+                           raw=rg, companions=comps, trace_offset=offset)
+            e.update(state="processing")
             try:
-                ln.process()
-            except Exception as e:  # noqa: BLE001
-                self.problems.append({"file": g.primary.name, "error": f"processing failed: {type(e).__name__}: {e}"})
-                continue
-            self.lines.append(ln)
+                ln.process(progress=lambda step: self._step(e, step))
+            except Exception as ex:  # noqa: BLE001
+                self._entry_failed(e, f"processing failed: {type(ex).__name__}: {ex}")
+                return
+            e.update(state="saving", step="checkpoint")
+            self.write_checkpoint(ln, e)
+            with self.lock:
+                self.lines = sorted([x for x in self.lines if x.line_id != line_id] + [ln], key=_line_order)
+            ids.append(line_id)
+            self.log(line_summary(ln))
+        with self.lock:
+            e.update(state="done", step="", line_ids=ids)
+            self.save()
+
+    def _entry_failed(self, e: dict[str, Any], msg: str) -> None:
+        with self.lock:
+            e.update(state="error", error=msg)
+            self.problems.append({"file": e["name"], "error": msg})
+            self.save()
+        self.log(f"{e['name']}: ผิดพลาด: {msg}")
+
+    def log(self, text: str) -> None:
+        """One line of progress to log.txt (open it with Notepad while the job runs) and to the page."""
+        line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  {text}"
+        self._log_tail.append(line)
+        del self._log_tail[:-300]
+        with (self.folder / "log.txt").open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    def checkpoint_path(self, line_id: str) -> Path:
+        return self.folder / "checkpoints" / f"{line_id}.pkl"
+
+    def write_checkpoint(self, ln: LineState, e: dict[str, Any]) -> None:
+        """Processed line (all display tracks, automatic zones) so reopening needs no reprocessing."""
+        d = self.checkpoint_path(ln.line_id)
+        d.parent.mkdir(exist_ok=True)
+        res = ln.result
+        slim = ProcessingResult(**{**{f.name: getattr(res, f.name) for f in fields(res)}, "layers": None, "energy": None,
+                                   "log": list(res.log)})
+        rec = {"version": CHECKPOINT_VERSION, "app_version": APP_VERSION, "source": e["primary"],
+               "source_stamp": _stamp(Path(e["primary"])), "range_m": e["range_m"],
+               "options": options_dict(ln.options),
+               "line": {"line_id": ln.line_id, "source_file": ln.source_file, "channel": ln.channel, "raw": ln.raw,
+                        "companions": ln.companions, "options": ln.options, "result": slim,
+                        "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones,
+                        "artifact_regions": [asdict(r) for r in ln.artifact_regions], "trace_offset": ln.trace_offset}}
+        tmp = d.with_suffix(".tmp")
+        with tmp.open("wb") as f:
+            pickle.dump(rec, f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp.replace(d)
+
+    def read_checkpoint(self, e: dict[str, Any], line_id: str) -> LineState | None:
+        """The saved line if it was made from the same file, range and app version; else None."""
+        p = self.checkpoint_path(line_id)
+        if not p.is_file():
+            return None
+        try:
+            with p.open("rb") as f:
+                rec = pickle.load(f)  # our own file, written by write_checkpoint
+        except Exception:  # noqa: BLE001 - a half-written or old file is simply redone
+            return None
+        if (rec.get("version") != CHECKPOINT_VERSION or rec.get("source") != e["primary"]
+                or rec.get("range_m") != e["range_m"] or rec.get("source_stamp") != _stamp(Path(e["primary"]))):
+            return None
+        d = rec["line"]
+        ln = LineState(line_id=d["line_id"], source_file=d["source_file"], channel=d["channel"], raw=d["raw"],
+                       companions=d["companions"], options=d["options"], result=d["result"],
+                       zones=[Zone.from_dict(z) for z in d["zones"]], auto_zones=d["auto_zones"],
+                       artifact_regions=[ArtifactRegion(**a) for a in d["artifact_regions"]],
+                       trace_offset=d["trace_offset"])
+        return ln
+
+    def progress_json(self) -> dict[str, Any]:
+        total = len(self.plan)
+        frac = 0.0
+        for e in self.plan:
+            if e["state"] in ("done", "error"):
+                frac += 1
+            elif e["state"] != "waiting":
+                frac += min(e.get("steps_done", 0) / STEPS_PER_LINE, 0.95)
+        state = self.progress.get("state", "done")
+        if state == "processing" and not self.running and any(e["state"] not in ("done", "error") for e in self.plan):
+            state = "interrupted"
+        return {**self.progress, "state": state, "running": self.running, "total": total,
+                "done": sum(e["state"] == "done" for e in self.plan), "fraction": round(frac / total, 3) if total else 1.0,
+                "entries": [{k: e.get(k) for k in ("index", "name", "state", "step", "line_ids", "error", "range_m")}
+                            for e in self.plan],
+                "log": self._log_tail[-60:]}
 
     # ------------------------------------------------------------------ review
     def review(self, line_id: str, zone_id: str, action: str, changes: dict[str, Any] | None = None,
@@ -325,8 +498,8 @@ class Job:
             if key not in base:
                 raise ValueError(f"{key} is required")
         if ln.analysis.dx_m is not None:
-            base["distance_start_m"] = base["trace_start"] * ln.analysis.dx_m
-            base["distance_end_m"] = base["trace_end"] * ln.analysis.dx_m
+            base["distance_start_m"] = (base["trace_start"] + ln.trace_offset) * ln.analysis.dx_m
+            base["distance_end_m"] = (base["trace_end"] + ln.trace_offset) * ln.analysis.dx_m
         z = Zone.from_dict(base)
         ln.zones.append(z)
         self._label("add", ln, z.zone_id, None, z.to_dict())
@@ -346,6 +519,11 @@ class Job:
         dropped = [z.to_dict() for z in ln.zones if z.review != "auto"]
         ln.options = opt
         ln.process()
+        e = next((e for e in self.plan if ln.line_id in e["line_ids"]), None)
+        if e is not None:
+            self.write_checkpoint(ln, e)
+        self.log(f"ประมวลผลใหม่ {ln.line_id} ด้วยค่าที่ผู้ใช้ตั้ง {options_dict(opt) or '(อัตโนมัติ)'}")
+        self.log(line_summary(ln))
         self._label("reprocess", ln, None, {"reviewed_zones_discarded": dropped}, {"options": options_dict(opt)})
         return ln
 
@@ -371,13 +549,15 @@ class Job:
         comp = self.comparison_json()
         zones = [z for ln in self.lines for z in ln.zones]
         state = {
-            "version": 1, "job_id": self.job_id, "created": self.created, "saved": _now(), "info": asdict(self.info),
-            "lang": self.lang, "reviewer": self.reviewer,
+            "version": 2, "job_id": self.job_id, "created": self.created, "saved": _now(), "info": asdict(self.info),
+            "lang": self.lang, "reviewer": self.reviewer, "source_folder": self.source_folder,
+            "plan": self.plan, "progress": self.progress, "problems": self.problems, "unassigned": self.unassigned,
             "lines": [{"line_id": ln.line_id, "source_file": ln.source_file, "options": options_dict(ln.options),
                        "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones} for ln in self.lines],
             "comparison": self.comparison,
             # read by the job list and the all-jobs comparison export without reprocessing
             "summary": {"n_lines": len(self.lines), "files": sorted({ln.source_file for ln in self.lines}),
+                        "n_planned": len(self.plan), "n_done": sum(e["state"] == "done" for e in self.plan),
                         "review": review_counts(zones), "compare": comp["total"]},
             "compare_lines": [{"line_id": k, **{x: v[x] for x in ("source_file", "summary", "meta_check")}}
                               for k, v in comp["lines"].items()],
@@ -389,24 +569,68 @@ class Job:
 
     @classmethod
     def restore(cls, folder: Path) -> "Job":
-        """Reopen a job saved by an earlier run: re-read the uploads, then put back options, zones and reviews."""
+        """Reopen a job saved by an earlier run.
+
+        Lines come back from their checkpoints; a line without one (the run was cut off, or the job is from
+        an older version) is processed again: synchronously for old jobs, by resume() for unfinished ones.
+        Then the saved options, zones and reviews are put back.
+        """
         st = json.loads((folder / "state.json").read_text(encoding="utf-8"))
         job = cls(job_id=st["job_id"], folder=folder, created=st.get("created", _now()))
         job.info = SurveyInfo(**{k: v for k, v in st.get("info", {}).items() if k in {f.name for f in fields(SurveyInfo)}})
         job.lang, job.reviewer = st.get("lang", "bi"), st.get("reviewer", "")
         job.comparison = cmp.upgrade_state(st.get("comparison") or cmp.new_state())
-        job.load(sorted(p for p in job.upload_dir.iterdir() if p.is_file()))
+        job.source_folder = st.get("source_folder", "")
+        if "plan" not in st:  # version 1: no plan or checkpoints yet
+            job.load(sorted(p for p in job.upload_dir.iterdir() if p.is_file()))
+        else:
+            job.plan, job.progress = st["plan"], st.get("progress", {"state": "done"})
+            job.problems, job.unassigned = st.get("problems", []), st.get("unassigned", [])
+            for e in job.plan:
+                if e["state"] != "done":
+                    if e["state"] != "error":
+                        e.update(state="waiting", step="")
+                    continue
+                lines = [job.read_checkpoint(e, lid) for lid in e["line_ids"]]
+                if all(lines):
+                    job.lines.extend(lines)
+                else:
+                    e.update(state="waiting", step="", line_ids=[])  # checkpoint missing or stale: redo
+            job.lines.sort(key=_line_order)
+            pending = [e for e in job.plan if e["state"] == "waiting"]
+            if pending and job.progress.get("state") == "done":
+                job.progress["state"] = "processing"  # shown as "interrupted" until resumed
+            if pending:
+                job.log(f"เปิดงานอีกครั้ง: เสร็จแล้ว {len(job.plan) - len(pending)} ไฟล์ ค้าง {len(pending)} ไฟล์ (กด 'ทำต่อ')")
         saved = {d["line_id"]: d for d in st.get("lines", [])}
         for ln in job.lines:
             d = saved.get(ln.line_id)
             if not d or d.get("source_file") != ln.source_file:
                 continue
-            if d.get("options"):
+            if d.get("options") and d["options"] != options_dict(ln.options):
                 ln.options = parse_options(d["options"])
                 ln.process()
             ln.zones = [Zone.from_dict(z) for z in d.get("zones", [])]
             ln.auto_zones = d.get("auto_zones", ln.auto_zones)
         return job
+
+    def _reset_failed(self) -> bool:
+        if not any(e["state"] != "done" for e in self.plan) or self.running:
+            return False
+        for e in self.plan:
+            if e["state"] == "error":
+                e.update(state="waiting", error=None)
+        self.problems = [p for p in self.problems if p.get("error") == "unknown_format"]
+        return True
+
+    def resume(self) -> None:
+        """Continue an interrupted job (and retry files that failed) in the background."""
+        if self._reset_failed():
+            self.start()
+
+    def resume_now(self) -> None:
+        if self._reset_failed():
+            self.run_plan()
 
     def export(self, name: str) -> Path:
         """Write report.pdf/.docx/.html, zones.csv or survey.json into the job folder."""
@@ -443,6 +667,7 @@ class Job:
         zones = [z for ln in self.lines for z in ln.zones]
         return {
             "job_id": self.job_id, "created": self.created, "info": asdict(self.info), "lang": self.lang,
+            "source_folder": self.source_folder, "progress": self.progress_json(),
             "reviewer": self.reviewer, "problems": self.problems, "unassigned": self.unassigned,
             "review": review_counts(zones), "draft": any(z.review == "auto" for z in zones),
             "lines": [ln.to_json(self.info.surface_use) for ln in self.lines],
@@ -458,7 +683,7 @@ class Job:
     def geom(self, ln: LineState) -> cmp.LineGeom:
         a = ln.analysis
         return cmp.LineGeom(n_traces=a.n_traces, dx_m=a.dx_m, time_window_ns=a.n_samples * a.dt_ns,
-                            velocity_m_per_ns=ln.result.velocity_m_per_ns)
+                            velocity_m_per_ns=ln.result.velocity_m_per_ns, offset_traces=ln.trace_offset)
 
     def comparison_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -643,6 +868,86 @@ def line_summary_rows(job_id: str, project: str, comp: dict[str, Any]) -> list[d
     return rows
 
 
+CHECKPOINT_VERSION = 1
+STEPS_PER_LINE = 15  # run_pipeline steps + detection, for the progress bar
+
+
+def _stamp(p: Path) -> list[float]:
+    """Size and modification time of the data file(s), to notice a changed source."""
+    out = []
+    for q in sorted(p.parent.glob(p.stem + ".*")):
+        if q.suffix.lower() in (".iprh", ".iprb", ".rad", ".rd3", ".rd7", ".hd", ".dt1", ".dzt", ".sgy", ".segy", ".cor"):
+            st = q.stat()
+            out += [float(st.st_size), round(st.st_mtime, 3)]
+    return out
+
+
+def _line_order(ln: LineState) -> tuple[int, str]:
+    head = ln.line_id[1:].split("-")[0]
+    return (int(head) if head.isdigit() else 10**9, ln.line_id)
+
+
+def crop_to_range(rg: Radargram, start_m: float | None, end_m: float | None) -> tuple[Radargram, int]:
+    """Traces between start_m and end_m along the line (None = line start / end). Returns (radargram, first trace).
+
+    GPS fixes and markers are shifted to the new trace numbers; the fix just outside each end is kept so
+    positions at the ends still interpolate.
+    """
+    if not rg.dx_m:
+        raise ValueError("this file has no trace spacing, so a distance range cannot be applied")
+    n = rg.n_traces
+    t0 = 0 if start_m is None else int(np.floor(max(start_m, 0.0) / rg.dx_m))
+    t1 = n - 1 if end_m is None else int(np.ceil(end_m / rg.dx_m))
+    t0, t1 = max(t0, 0), min(t1, n - 1)
+    if t1 - t0 < 10:
+        raise ValueError(f"range {start_m}–{end_m} m leaves fewer than 10 traces (line is {n * rg.dx_m:.1f} m)")
+    meta = dict(rg.metadata)
+    gps = sorted(meta.get("gps") or [], key=lambda r: r["trace"])
+    if gps:
+        inside = [i for i, r in enumerate(gps) if t0 <= r["trace"] <= t1]
+        lo = max((inside[0] if inside else next((i for i, r in enumerate(gps) if r["trace"] > t1), len(gps))) - 1, 0)
+        hi = min((inside[-1] if inside else lo) + 1, len(gps) - 1)
+        meta["gps"] = [{**r, "trace": r["trace"] - t0} for r in gps[lo:hi + 1]]
+    if meta.get("markers"):
+        meta["markers"] = [{**m, "trace": m["trace"] - t0} for m in meta["markers"] if t0 <= m.get("trace", -1) <= t1]
+    if meta.get("dead_traces"):
+        meta["dead_traces"] = [t - t0 for t in meta["dead_traces"] if t0 <= t <= t1]
+    meta["crop"] = {"trace_start": t0, "trace_end": t1, "start_m": round(t0 * rg.dx_m, 3), "end_m": round(t1 * rg.dx_m, 3),
+                    "n_traces_file": n}
+    out = rg.copy_with(data=np.ascontiguousarray(rg.data[:, t0:t1 + 1]))
+    out.metadata = meta
+    return out, t0
+
+
+STEP_TH = {"read": "อ่านไฟล์", "center_frequency": "หาความถี่", "dewow": "Dewow", "time_zero": "Time-zero",
+           "bandpass": "Bandpass", "background_removal": "ลบพื้นหลัง", "gain": "Gain", "velocity": "หาความเร็วคลื่น",
+           "migration": "Migration", "envelope": "Envelope", "agc": "AGC", "viewpoint_display": "ภาพแบบ ViewPoint",
+           "detect": "ค้นหาโซนผิดปกติ", "checkpoint": "บันทึก checkpoint"}
+TYPE_TH = {"void_like": "คล้ายโพรง", "pipe_point": "ท่อ/วัตถุจุด", "layer": "ชั้นดิน", "scattered": "สะท้อนกระจัดกระจาย",
+           "artifact": "artifact", "unknown": "ไม่ระบุ"}
+CONF_TH = {"high": "สูง", "medium": "กลาง", "low": "ต่ำ", "confirmed": "ยืนยัน"}
+
+
+def line_summary(ln: LineState) -> str:
+    """What one processed line gave, for log.txt: size, velocity, zone counts and the suspicious ones."""
+    a, res = ln.analysis, ln.result
+    length = f"{a.n_traces * a.dx_m:.1f} m" if a.dx_m else "ไม่ทราบระยะ"
+    rng = f" ช่วง {ln.offset_m:.1f}–{ln.offset_m + a.n_traces * (a.dx_m or 0):.1f} m" if ln.trace_offset else ""
+    counts: dict[str, int] = {}
+    for z in ln.zones:
+        counts[z.suspected_type] = counts.get(z.suspected_type, 0) + 1
+    txt = (f"{ln.line_id} {ln.source_file}{rng}: {a.n_traces} trace, {length}, v {res.velocity_m_per_ns:.3f} m/ns "
+           f"({res.velocity_source_code}) → {len(ln.zones)} โซน"
+           + (": " + ", ".join(f"{TYPE_TH.get(k, k)} {v}" for k, v in sorted(counts.items())) if counts else ""))
+    for z in ln.zones:
+        if z.suspected_type == "void_like" and z.confidence in ("high", "medium"):
+            where = (f"{z.distance_start_m:.1f}–{z.distance_end_m:.1f} m" if z.distance_start_m is not None
+                     else f"trace {z.trace_start}–{z.trace_end}")
+            txt += (f"\n    ⚠ น่าสงสัย {z.zone_id}: {TYPE_TH[z.suspected_type]} เชื่อมั่น{CONF_TH[z.confidence]} ที่ {where}"
+                    f" ลึก {z.depth_top_m:.2f}–{z.depth_bottom_m:.2f} m")
+    return txt
+
+
 def _companion(p: Path) -> dict[str, Any]:
     return {"name": p.name, "size": p.stat().st_size, "text": preview_text(p)}
 
@@ -674,9 +979,9 @@ def _clean_changes(changes: dict[str, Any], ln: LineState) -> dict[str, Any]:
             out[lo], out[hi] = out[hi], out[lo]
     if a.dx_m is not None:
         if "trace_start" in out:
-            out["distance_start_m"] = out["trace_start"] * a.dx_m
+            out["distance_start_m"] = (out["trace_start"] + ln.trace_offset) * a.dx_m
         if "trace_end" in out:
-            out["distance_end_m"] = out["trace_end"] * a.dx_m
+            out["distance_end_m"] = (out["trace_end"] + ln.trace_offset) * a.dx_m
     return out
 
 
@@ -714,7 +1019,13 @@ class JobStore:
         return out
 
     def summaries(self) -> list[dict[str, Any]]:
-        return [{"job_id": s["job_id"], "created": s.get("created"), "saved": s.get("saved"),
+        def state(s: dict[str, Any]) -> str:
+            j = self.jobs.get(s["job_id"])
+            if j is not None:
+                return j.progress_json()["state"]
+            st = s.get("progress", {}).get("state", "done")
+            return "interrupted" if st in ("processing", "waiting") else st
+        return [{"job_id": s["job_id"], "created": s.get("created"), "saved": s.get("saved"), "state": state(s),
                  "project": s.get("info", {}).get("project", ""), "site": s.get("info", {}).get("site", ""),
                  **s.get("summary", {})} for s in self.states()]
 

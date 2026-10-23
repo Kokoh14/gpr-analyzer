@@ -12,7 +12,7 @@ Two output tracks:
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -117,9 +117,23 @@ def auto_process(rg: Radargram, options: ProcessingOptions | None = None) -> tup
     return out, steps
 
 
-def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None) -> ProcessingResult:
+class _ReportingLog(list):
+    """Step log that also tells a caller which step just finished (for progress displays)."""
+
+    def __init__(self, progress: Callable[[str], None]) -> None:
+        super().__init__()
+        self._progress = progress
+
+    def append(self, step: StepLog) -> None:  # type: ignore[override]
+        super().append(step)
+        self._progress(step.step)
+
+
+def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
+                 progress: Callable[[str], None] | None = None) -> ProcessingResult:
+    """progress: optional callback called with each step name as it finishes."""
     opt = options or ProcessingOptions()
-    log: list[StepLog] = []
+    log: list[StepLog] = _ReportingLog(progress) if progress else []
     dt = rg.dt_ns
     d = rg.data.astype(np.float32)
 

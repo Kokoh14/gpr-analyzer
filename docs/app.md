@@ -10,7 +10,21 @@ A small FastAPI server on the user's own computer plus one HTML/JS page (`gpr_an
 Nothing is uploaded anywhere else. It answers the "desktop app or web app" question with both: it is
 started like a program, and the screen is a web page.
 
-Flow: drop several files (pairs such as `.iprh + .iprb`, `.rad + .rd3`, `.HD + .DT1`, plus `.txt` with the
+Flow: choose the data folder (system folder dialog, or the in-page browser `/api/fs`) → completeness check
+(`app/folders.py`, headers and side files only: pairs present, whole traces, LAST TRACE, GPS coverage, gaps and
+length, markers) with a rough map of the tracks → tick lines and optionally a distance range per line → the job
+reads the files in place (nothing is copied). Dropping files still works (they are copied into `uploads/`).
+
+Processing runs in a background thread, one line after another. The page polls `/api/jobs/<id>/progress` and
+shows each file's stage (read, each processing step, detection, checkpoint); `log.txt` in the job folder gets a
+line per stage and a summary per line (zones by type, suspicious void-like zones with position and depth).
+Each finished line is pickled to `checkpoints/<line>.pkl` (raw, display tracks, automatic zones), so reopening
+a job needs no reprocessing, and a job cut off by a crash or power failure shows as interrupted and continues
+with the unfinished files (`/resume`). A checkpoint is redone if its source file changed. With a distance range
+only those traces are processed; trace numbers on screen count from the start of the range, distances in
+metres (axis, zones, report, reference matching) from the start of the line.
+
+Older flow, still supported: drop several files (pairs such as `.iprh + .iprb`, `.rad + .rd3`, `.HD + .DT1`, plus `.txt` with the
 same name) → each line is read, processed (`processing.run_pipeline`) and scanned (`detect.analyze_line`)
 automatically → review screen.
 

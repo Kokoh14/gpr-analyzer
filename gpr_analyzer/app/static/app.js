@@ -73,7 +73,7 @@ function renderFiles() {
       <td><button class="btn ghost" data-rm="${i}">ลบ</button></td></tr>`;
   }).join("");
   $("#fileList").hidden = !S.files.length;
-  $("#runBtn").disabled = !S.files.length;
+  updateRunBtn();
 }
 function addFiles(list) {
   for (const f of list) if (!S.files.some((g) => g.name === f.name)) S.files.push(f);
@@ -85,18 +85,179 @@ function infoValues(form) {
   return d;
 }
 async function runUpload() {
+  if (S.scan && selectedLines().length) return runFolder();
   const fd = new FormData();
   S.files.forEach((f) => fd.append("files", f, f.name));
-  busy(true, `กำลังอ่านและประมวลผล ${S.files.length} ไฟล์…`);
+  busy(true, `กำลังส่ง ${S.files.length} ไฟล์เข้าโปรแกรม…`);
   try {
     const job = await api("/api/jobs", { method: "POST", body: fd });
     S.job = await post(`/api/jobs/${job.job_id}/info`, infoValues($("#infoForm")));
-    openReview();
+    openProgress();
   } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
 }
 async function runDemo() {
-  busy(true, "กำลังสร้างข้อมูลสังเคราะห์และประมวลผล…");
-  try { S.job = await post("/api/demo", {}); openReview(); } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
+  busy(true, "กำลังสร้างข้อมูลสังเคราะห์…");
+  try { S.job = await post("/api/demo", {}); openProgress(); } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
+}
+
+// ------------------------------------------------------------------ data folder: pick, browse, check
+const LEVEL = { ok: ["✓ ครบ", "ok"], warn: ["⚠ ควรตรวจ", "warn"], error: ["✗ ใช้ไม่ได้", "bad"] };
+async function pickFolder() {
+  try {
+    const r = await post("/api/pick-folder", { start: $("#folderPath").value });
+    if (r.path) { $("#folderPath").value = r.path; scanFolder(); }
+  } catch (e) { toast("เปิดหน้าต่างเลือกโฟลเดอร์ไม่ได้ ใช้ปุ่ม 'เรียกดู…' แทน"); browse($("#folderPath").value); }
+}
+async function browse(path) {
+  let r;
+  try { r = await api(`/api/fs?path=${encodeURIComponent(path || "")}`); } catch (e) { toast(e.message); return; }
+  const b = $("#browser"); b.hidden = false;
+  b.innerHTML = `<div class="browser-head"><b>${esc(r.path || "เลือกไดรฟ์หรือโฟลเดอร์")}</b>
+      ${r.path ? `<span class="muted small">ไฟล์ GPR ${r.gpr_files} ไฟล์</span>` : ""}
+      <span class="spacer"></span>${r.path ? `<button class="btn primary small" data-usefolder="${esc(r.path)}">ใช้โฟลเดอร์นี้</button>` : ""}
+      <button class="btn ghost small" data-closebrowser>ปิด</button></div>
+    <ul>${r.parent != null ? `<li data-browse="${esc(r.parent)}">⬆ ขึ้นไป</li>` : ""}
+      ${r.dirs.map((d) => `<li data-browse="${esc(d.path)}">📁 ${esc(d.name)}</li>`).join("") || `<li class="muted">ไม่มีโฟลเดอร์ย่อย</li>`}</ul>`;
+}
+async function scanFolder() {
+  const path = $("#folderPath").value.trim();
+  if (!path) { toast("เลือกหรือพิมพ์ที่อยู่โฟลเดอร์ก่อน"); return; }
+  busy(true, "กำลังตรวจไฟล์ในโฟลเดอร์…");
+  try {
+    S.scan = await post("/api/scan", { path, recursive: $("#recursive").checked });
+    for (const ln of S.scan.lines) ln.include = ln.status !== "error";
+    keep("lastFolder", path);
+    $("#browser").hidden = true;
+    renderScan();
+  } catch (e) { toast("ตรวจโฟลเดอร์ไม่ได้: " + e.message); } finally { busy(false); }
+}
+const selectedLines = () => (S.scan?.lines || []).filter((l) => l.include);
+function renderScan() {
+  const r = S.scan, sm = r.summary;
+  $("#scanResult").hidden = false;
+  $("#scanSummary").innerHTML = `<b>${esc(r.path)}</b> · ${r.n_files} ไฟล์ ·
+    <span class="chip">${sm.lines} เส้น</span><span class="chip ok-y">ครบ ${sm.ok}</span>
+    <span class="chip warn">ควรตรวจ ${sm.warn}</span><span class="chip ok-n">ใช้ไม่ได้ ${sm.error}</span>
+    <span class="chip">ไม่มี GPS ${sm.no_gps}</span><span class="chip">รวม ${fmt(sm.length_m, 1)} m</span>
+    ${r.unassigned.length ? `<span class="small muted" title="${esc(r.unassigned.join("\n"))}">ไฟล์อื่น ${r.unassigned.length} ไฟล์ (ไม่ได้ใช้)</span>` : ""}`;
+  $("#scanRows").innerHTML = r.lines.map((l, i) => {
+    const [lab, cls] = LEVEL[l.status];
+    const iss = l.issues.filter((x) => x.level !== "info").map((x) => esc(x.text)).join("<br>")
+      || `<span class="muted">${l.issues.map((x) => esc(x.text)).join("<br>") || "–"}</span>`;
+    return `<tr data-scanrow="${i}" class="${l.include ? "" : "off"}">
+      <td><input type="checkbox" data-include="${i}" ${l.include ? "checked" : ""} ${l.status === "error" ? "disabled" : ""}></td>
+      <td><span class="role ${cls}">${lab}</span></td>
+      <td><b>${esc(l.name)}</b><br><span class="small muted">${esc(l.antenna || l.family)}${l.date ? " · " + esc(l.date) : ""}</span></td>
+      <td>${l.n_traces ?? "–"}</td><td>${l.length_m != null ? fmt(l.length_m, 1) + " m" : "–"}</td>
+      <td>${l.gps_fixes ? `${l.gps_fixes} จุด` + (l.length_gps_m != null ? `<br><span class="small muted">${fmt(l.length_gps_m, 1)} m</span>` : "") : `<span class="muted">ไม่มี</span>`}</td>
+      <td>${l.markers || 0}</td>
+      <td class="range"><input type="number" step="0.1" min="0" data-range="${i}:0" placeholder="0" value="${l.range?.[0] ?? ""}" ${l.dx_m ? "" : "disabled"}>–
+        <input type="number" step="0.1" min="0" data-range="${i}:1" placeholder="${l.length_m != null ? fmt(l.length_m, 1) : ""}" value="${l.range?.[1] ?? ""}" ${l.dx_m ? "" : "disabled"}></td>
+      <td class="small">${iss}</td></tr>`;
+  }).join("") || `<tr><td colspan="9" class="muted">ไม่พบไฟล์ GPR ในโฟลเดอร์นี้</td></tr>`;
+  updateRunBtn();
+  drawScanMap();
+}
+function updateRunBtn() {
+  const n = selectedLines().length;
+  $("#runBtn").disabled = !(n || S.files.length);
+  $("#runBtn").textContent = n ? `เริ่มประมวลผล ${n} เส้นจากโฟลเดอร์` : "เริ่มวิเคราะห์";
+}
+function drawScanMap() {
+  const lines = S.scan.lines.filter((l) => l.track);
+  $("#scanMap").hidden = !lines.length || typeof L === "undefined";
+  if ($("#scanMap").hidden) return;
+  if (!S.scanMap) {
+    S.scanMap = L.map("scanMap", { preferCanvas: true, maxZoom: 22 });
+    const [, url, attr] = BASEMAPS[store("scanBase", "satellite")] || BASEMAPS.satellite;
+    L.tileLayer(url, { attribution: attr, maxNativeZoom: 19, maxZoom: 22 }).addTo(S.scanMap);
+    L.control.scale({ imperial: false }).addTo(S.scanMap);
+    S.scanLayer = L.layerGroup().addTo(S.scanMap);
+  }
+  S.scanLayer.clearLayers();
+  const col = { ok: "#2f9e44", warn: "#e8590c", error: "#c92a2a" };
+  S.scan.lines.forEach((l, i) => {
+    if (!l.track) return;
+    L.polyline(l.track, { color: "#fff", weight: 6, opacity: l.include ? 0.9 : 0.3 }).addTo(S.scanLayer);
+    const pl = L.polyline(l.track, { color: col[l.status], weight: 3, opacity: l.include ? 1 : 0.4, dashArray: l.include ? null : "4 4" })
+      .addTo(S.scanLayer).bindTooltip(`${esc(l.name)} · ${l.length_m != null ? fmt(l.length_m, 1) + " m" : ""} · ${LEVEL[l.status][0]}`, { sticky: true });
+    pl.on("click", () => $(`[data-scanrow="${i}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+    L.circleMarker(l.track[0], { radius: 3, color: col[l.status], fillOpacity: 1 }).addTo(S.scanLayer);
+  });
+  S.scanMap.fitBounds(lines.flatMap((l) => l.track), { padding: [20, 20], maxZoom: 20 });
+  setTimeout(() => S.scanMap.invalidateSize(), 50);
+}
+async function runFolder() {
+  const ranges = {}, sel = selectedLines();
+  for (const l of sel) if (l.range && (l.range[0] !== "" || l.range[1] !== "")) ranges[l.primary] = l.range;
+  busy(true, "กำลังเริ่มงาน…");
+  try {
+    const info = infoValues($("#infoForm"));
+    S.job = await post("/api/jobs/from-folder", { path: S.scan.path, recursive: S.scan.recursive, include: sel.map((l) => l.primary), ranges, info });
+    S.job = await post(`/api/jobs/${S.job.job_id}/info`, info);
+    openProgress();
+  } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
+}
+
+// ------------------------------------------------------------------ processing progress (polls the server)
+const ESTATE = { waiting: "รอคิว", reading: "กำลังอ่าน", processing: "กำลังประมวลผล", saving: "กำลังบันทึก", done: "✓ เสร็จ", error: "✗ ผิดพลาด" };
+const STEP_TH = { read: "อ่านไฟล์", center_frequency: "หาความถี่", dewow: "Dewow", time_zero: "Time-zero", bandpass: "Bandpass",
+  background_removal: "ลบพื้นหลัง", gain: "Gain", velocity: "หาความเร็วคลื่น", migration: "Migration", envelope: "Envelope",
+  agc: "AGC", viewpoint_display: "ภาพแบบ ViewPoint", detect: "ค้นหาโซนผิดปกติ", checkpoint: "บันทึก checkpoint" };
+function openProgress() {
+  $("#uploadView").hidden = true; $("#reviewView").hidden = true; $("#progressView").hidden = false; $("#exports").hidden = true;
+  history.replaceState(null, "", "#" + S.job.job_id);
+  $("#logLink").href = jobUrl("/log.txt");
+  S.autoOpen = true;
+  renderProgress(S.job.progress);
+  pollProgress();
+}
+function renderProgress(p) {
+  const state = { processing: "กำลังประมวลผล", waiting: "รอเริ่ม", done: "ประมวลผลเสร็จแล้ว", interrupted: "งานค้าง (ทำต่อได้)" }[p.state] || p.state;
+  $("#progTitle").textContent = `${state} · ${p.done}/${p.total} ไฟล์`;
+  $("#progBar").style.width = `${Math.round(p.fraction * 100)}%`;
+  $("#progNote").textContent = p.started ? `เริ่ม ${new Date(p.started).toLocaleTimeString("th-TH")}` + (p.finished ? ` · เสร็จ ${new Date(p.finished).toLocaleTimeString("th-TH")}` : "") : "";
+  $("#progRows").innerHTML = p.entries.map((e) => `<tr class="st-${e.state}"><td>${e.index + 1}</td><td>${esc(e.name)}</td>
+    <td>${e.range_m ? `${e.range_m[0] ?? 0}–${e.range_m[1] ?? "จบ"}` : "ทั้งเส้น"}</td><td>${ESTATE[e.state] || e.state}</td>
+    <td class="small">${e.error ? `<span class="bad">${esc(e.error)}</span>` : esc(STEP_TH[e.step] || e.step || "")}</td>
+    <td>${e.line_ids.map((id) => `<a href="#" data-openline="${esc(id)}">${esc(id)}</a>`).join(" ")}</td></tr>`).join("");
+  const box = $("#logBox"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 10;
+  box.textContent = p.log.join("\n");
+  if (atEnd) box.scrollTop = box.scrollHeight;
+  $("#toReview").disabled = !p.done;
+  $("#resumeBtn").hidden = p.state !== "interrupted";
+}
+async function pollProgress() {
+  clearTimeout(S.pollH);
+  if (!S.job) return;
+  let p;
+  try { p = await api(jobUrl("/progress")); } catch (e) { S.pollH = setTimeout(pollProgress, 3000); return; }
+  if (!$("#progressView").hidden) renderProgress(p);
+  if (!$("#reviewView").hidden) {
+    renderBanner(p);
+    if (p.n_lines !== S.job.lines.length && !S.editing && !S.drag && !S.pan) {
+      S.job = await api(jobUrl("")); renderTop(); renderLines(); M.load();
+    }
+  }
+  if (p.state === "processing" || p.state === "waiting") S.pollH = setTimeout(pollProgress, 1000);
+  else if (p.state === "done" && !$("#progressView").hidden && S.autoOpen) {
+    S.job = await api(jobUrl("")); openReview(); toast("ประมวลผลเสร็จแล้ว");
+  } else if (!$("#reviewView").hidden && p.n_lines !== S.job.lines.length) { S.job = await api(jobUrl("")); render(); M.load(); }
+}
+function renderBanner(p) {
+  const b = $("#runBanner");
+  b.hidden = p.state === "done";
+  if (p.state === "interrupted") b.innerHTML = `⚠ งานนี้ค้างอยู่: เสร็จ ${p.done}/${p.total} ไฟล์ <button class="btn small" data-resume>ทำต่อ</button> <a href="#" data-showprog>ดูรายละเอียด</a>`;
+  else if (!b.hidden) {
+    const cur = p.entries.find((e) => !["waiting", "done", "error"].includes(e.state));
+    b.innerHTML = `<div class="pbar"><span style="width:${Math.round(p.fraction * 100)}%"></span></div>
+      กำลังประมวลผล ${p.done}/${p.total} ไฟล์${cur ? ` · ${esc(cur.name)}: ${esc(STEP_TH[cur.step] || cur.step)}` : ""}
+      · เส้นใหม่จะขึ้นในรายการเมื่อเสร็จ <a href="#" data-showprog>ดูความคืบหน้า / log</a>`;
+  }
+}
+async function resumeJob() {
+  try { S.job = await post(jobUrl("/resume"), {}); toast("ทำต่อจากเส้นที่ค้าง"); pollProgress(); if (!$("#progressView").hidden) renderProgress(S.job.progress); }
+  catch (e) { toast("ผิดพลาด: " + e.message); }
 }
 
 async function loadPastJobs() {
@@ -107,19 +268,27 @@ async function loadPastJobs() {
     const r = j.review || {}, n = (r.auto || 0) + (r.accepted || 0) + (r.edited || 0) + (r.rejected || 0), c = j.compare;
     const cmp = c && c.n_ref ? `อ้างอิง ${c.n_ref} จุด · ตรง ${c.match + c.partial} · เราไม่พบ ${c.missed} · เราพบเกิน ${c.extra}` : `<span class="muted">ยังไม่ได้เทียบ</span>`;
     return `<tr><td><b>${esc(j.project || "งานสำรวจ")}</b><br><span class="small muted">${esc(j.job_id)}</span></td>
-      <td class="small">${(j.files || []).map(esc).join("<br>")}</td><td>${n - (r.auto || 0)}/${n}</td><td class="small">${cmp}</td>
+      <td class="small">${(j.files || []).map(esc).join("<br>")}</td>
+      <td class="small">${j.state === "interrupted" ? `<span class="badge draft">ค้าง ${j.n_done ?? "?"}/${j.n_planned ?? "?"} ทำต่อได้</span>`
+        : j.state === "processing" ? "กำลังประมวลผล" : "เสร็จ"}</td>
+      <td>${n - (r.auto || 0)}/${n}</td><td class="small">${cmp}</td>
       <td><a class="btn" href="#${esc(j.job_id)}" data-open="${esc(j.job_id)}">เปิด</a></td></tr>`;
   }).join("");
 }
 async function openJob(id) {
-  busy(true, "กำลังเปิดงานและประมวลผลไฟล์อีกครั้ง…");
-  try { S.job = await api(`/api/jobs/${id}`); openReview(); } catch (e) { toast("เปิดงานไม่ได้: " + e.message); history.replaceState(null, "", "/"); }
+  busy(true, "กำลังเปิดงาน…");
+  try {
+    S.job = await api(`/api/jobs/${id}`);
+    if (!S.job.lines.length && S.job.progress.total) openProgress(); else { openReview(); pollProgress(); }
+  } catch (e) { toast("เปิดงานไม่ได้: " + e.message); history.replaceState(null, "", "/"); }
   finally { busy(false); }
 }
 
 // ------------------------------------------------------------------ review
 function openReview() {
-  $("#uploadView").hidden = true; $("#reviewView").hidden = false; $("#exports").hidden = false;
+  S.autoOpen = false;
+  $("#uploadView").hidden = true; $("#progressView").hidden = true; $("#reviewView").hidden = false; $("#exports").hidden = false;
+  renderBanner(S.job.progress);
   history.replaceState(null, "", "#" + S.job.job_id);
   S.line = S.job.lines[0]?.line_id || null;
   buildInfoForm();
@@ -159,7 +328,8 @@ function renderLine() {
   if (!l) { $("#panes").innerHTML = ""; $("#zoneCards").innerHTML = ""; return; }
   $("#lineTitle").textContent = `${l.line_id} · ${l.source_file}`;
   $("#lineFacts").innerHTML = `${l.n_traces} traces · ${l.n_samples} samples · dt ${fmt(l.dt_ns, 3)} ns · time window ${fmt(l.time_window_ns, 0)} ns
-    · ระยะ trace ${l.dx_m ? fmt(l.dx_m, 3) + " m" : "ไม่ทราบ"} · ความเร็ว ${fmt(l.velocity_m_per_ns, 3)} m/ns (${esc(l.velocity_source)})
+    · ระยะ trace ${l.dx_m ? fmt(l.dx_m, 3) + " m" : "ไม่ทราบ"}
+    ${l.crop ? `· <b>ประมวลผลเฉพาะช่วง ${fmt(l.crop.start_m, 1)}–${fmt(l.crop.end_m, 1)} m</b> (trace ${l.crop.trace_start}–${l.crop.trace_end} จาก ${l.crop.n_traces_file} ของไฟล์; เลข trace บนภาพนับจากต้นช่วง ระยะ m นับจากต้นเส้น)` : ""} · ความเร็ว ${fmt(l.velocity_m_per_ns, 3)} m/ns (${esc(l.velocity_source)})
     ${l.companions.length ? "· ไฟล์ประกอบ: " + l.companions.map((c) => `<span title="${esc(c.text || "")}">${esc(c.name)}</span>`).join(", ") : ""}`;
   const stamp = Date.now();
   const views = VIEWS.filter(([v]) => (l.views || ["grey", "high_gain", "envelope"]).includes(v));
@@ -199,7 +369,7 @@ function yTicks(l, kind) {
 }
 function xTicks(l) {
   const N = l.n_traces, { x0, x1 } = S.view, f = (t) => ((t / N - x0) / (x1 - x0)) * 100;
-  return ticks(x0 * N, x1 * N, 8, (t) => `<span style="left:${f(t)}%">${Math.round(t)}${l.dx_m ? `<br>${(t * l.dx_m).toFixed(1)}` : ""}</span>`)
+  return ticks(x0 * N, x1 * N, 8, (t) => `<span style="left:${f(t)}%">${Math.round(t)}${l.dx_m ? `<br>${((t + (l.trace_offset || 0)) * l.dx_m).toFixed(1)}` : ""}</span>`)
     + `<span class="ttl">${l.dx_m ? "trace / ระยะ (m)" : "trace"}</span>`;
 }
 
@@ -213,7 +383,7 @@ function applyZoom() {
   $$('[data-axis="x"]').forEach((a) => (a.innerHTML = xTicks(l)));
   const zoomed = w < 0.999 || h < 0.999;
   $("#zoomInfo").textContent = zoomed ? `แสดง trace ${Math.round(x0 * l.n_traces)}–${Math.round(x1 * l.n_traces)}`
-    + (l.dx_m ? ` (${(x0 * l.n_traces * l.dx_m).toFixed(1)}–${(x1 * l.n_traces * l.dx_m).toFixed(1)} m)` : "")
+    + (l.dx_m ? ` (${((x0 * l.n_traces + (l.trace_offset || 0)) * l.dx_m).toFixed(1)}–${((x1 * l.n_traces + (l.trace_offset || 0)) * l.dx_m).toFixed(1)} m)` : "")
     + ` · ${(y0 * l.time_window_ns).toFixed(0)}–${(y1 * l.time_window_ns).toFixed(0)} ns` : "เต็มเส้น";
   drawGuides();
 }
@@ -621,7 +791,7 @@ document.addEventListener("mousemove", (e) => {
   const w = e.target.closest?.(".imgwrap");
   if (w && line()) {
     const p = pos(e, w), l = line();
-    $("#readout").textContent = `trace ${p.trace}${l.dx_m ? ` · ระยะ ${(p.trace * l.dx_m).toFixed(2)} m` : ""} · เวลา ${p.t.toFixed(1)} ns · ลึก ${(p.t * l.velocity_m_per_ns / 2).toFixed(2)} m (v ${l.velocity_m_per_ns.toFixed(3)})`
+    $("#readout").textContent = `trace ${p.trace}${l.dx_m ? ` · ระยะ ${((p.trace + (l.trace_offset || 0)) * l.dx_m).toFixed(2)} m` : ""} · เวลา ${p.t.toFixed(1)} ns · ลึก ${(p.t * l.velocity_m_per_ns / 2).toFixed(2)} m (v ${l.velocity_m_per_ns.toFixed(3)})`
       + (M.data?.has_gps ? " · ดูจุดนี้บนแผนที่ได้" : "");
     M.hover(p.trace);
   }
@@ -688,6 +858,18 @@ document.addEventListener("click", (e) => {
     else if (a === "box") startDraw(ZOOM_DRAW); else resetZoom();
     return;
   }
+  const br = t.closest("[data-browse]"); if (br) { browse(br.dataset.browse); return; }
+  const uf = t.closest("[data-usefolder]"); if (uf) { $("#folderPath").value = uf.dataset.usefolder; scanFolder(); return; }
+  if (t.closest("[data-closebrowser]")) { $("#browser").hidden = true; return; }
+  const sl = t.closest("[data-sel]");
+  if (sl && S.scan) {
+    for (const l of S.scan.lines) l.include = l.status !== "error" && (sl.dataset.sel === "all" || (sl.dataset.sel === "ok" && l.status === "ok"));
+    renderScan(); return;
+  }
+  if (t.closest("[data-resume]")) { resumeJob(); return; }
+  if (t.closest("[data-showprog]")) { e.preventDefault(); $("#reviewView").hidden = true; $("#progressView").hidden = false; S.autoOpen = false; pollProgress(); return; }
+  const ol = t.closest("[data-openline]");
+  if (ol) { e.preventDefault(); api(jobUrl("")).then((j) => { S.job = j; openReview(); switchLine(ol.dataset.openline); }); return; }
   const rm = t.closest("[data-rm]"); if (rm) { S.files.splice(+rm.dataset.rm, 1); renderFiles(); return; }
   const li = t.closest("[data-line]"); if (li) { switchLine(li.dataset.line); return; }
   const zb = t.closest(".zbox"); if (zb && S.drawFor === null) { select(zb.dataset.zone); return; }
@@ -712,6 +894,12 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("change", (e) => {
   const t = e.target;
+  if (t.dataset.include) { S.scan.lines[+t.dataset.include].include = t.checked; renderScan(); return; }
+  if (t.dataset.range) {
+    const [i, k] = t.dataset.range.split(":").map(Number), l = S.scan.lines[i];
+    l.range = l.range || ["", ""]; l.range[k] = t.value === "" ? "" : +t.value;
+    return;
+  }
   if (t.dataset.viewtoggle) {
     t.checked ? S.hidden.delete(t.dataset.viewtoggle) : S.hidden.add(t.dataset.viewtoggle);
     keep("hiddenViews", [...S.hidden]); renderLine(); if (S.sel) select(S.sel, false);
@@ -771,6 +959,13 @@ $("#fileInput").addEventListener("change", (e) => addFiles(e.target.files));
 ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
 $("#runBtn").addEventListener("click", runUpload);
+$("#pickBtn").addEventListener("click", pickFolder);
+$("#scanBtn").addEventListener("click", scanFolder);
+$("#browseBtn").addEventListener("click", () => browse($("#folderPath").value.trim()));
+$("#folderPath").addEventListener("keydown", (e) => { if (e.key === "Enter") scanFolder(); });
+$("#folderPath").value = store("lastFolder", "");
+$("#toReview").addEventListener("click", async () => { S.job = await api(jobUrl("")); openReview(); });
+$("#resumeBtn").addEventListener("click", resumeJob);
 $("#demoBtn").addEventListener("click", runDemo);
 $("#newJob").addEventListener("click", () => { if (confirm("เริ่มงานใหม่? งานนี้ยังเปิดได้จากโฟลเดอร์งานบนเครื่อง")) { location.hash = ""; location.reload(); } });
 $("#drawBtn").addEventListener("click", () => startDraw(""));
