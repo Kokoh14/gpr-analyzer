@@ -5,7 +5,8 @@ import base64
 import io
 import json
 import math
-from pathlib import Path
+from copy import copy
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,12 @@ MAX_LINES = 80
 MAX_COLUMNS = 192
 MAX_ROWS = 160
 TRACKS = ("grey", "envelope", "viewpoint")
+
+
+def snapshot(job: Any) -> Any:
+    """Called under the job lock; published results/arrays are replaced, never edited in place."""
+    return SimpleNamespace(job_id=job.job_id, folder=job.folder, info=copy(job.info),
+                           lines=[copy(ln) for ln in job.lines])
 
 
 def _fixes(ln: Any) -> list[dict]:
@@ -90,20 +97,41 @@ def _texture(ln: Any, rows: np.ndarray, columns: np.ndarray, track: str) -> str:
     from PIL import Image
 
     res = ln.result
+    cache = getattr(ln, "_cache", None)
+    if cache is None:
+        cache = ln._cache = {}
+    # A processing result is immutable once published. Keeping its identity also prevents id reuse.
+    if cache.get("scene3d_result") is not res:
+        cache["scene3d_result"] = res
+        cache["scene3d_textures"] = {}
+        cache["scene3d_contrast"] = {}
+    textures, contrast = cache["scene3d_textures"], cache["scene3d_contrast"]
+    key = (track, rows.tobytes(), columns.tobytes())
+    if key in textures:
+        return textures[key]
     d = res.envelope.data if track == "envelope" else (res.viewpoint.data if track == "viewpoint" else res.analysis.data)
-    d = np.nan_to_num(d, nan=0.0, posinf=0.0, neginf=0.0)
-    sampled = d[np.ix_(np.minimum(rows, d.shape[0] - 1), columns)].astype(float)
+    sampled = np.nan_to_num(d[np.ix_(np.minimum(rows, d.shape[0] - 1), columns)].astype(float),
+                            copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    if track not in contrast:
+        work = np.abs(d)
+        np.nan_to_num(work, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        contrast[track] = max(float(np.max(work) if track == "envelope" else
+                                   np.percentile(work, 99 if track == "grey" else 98, overwrite_input=True)), 1e-20)
+    ref = contrast[track]
     if track == "envelope":
-        ref = max(float(np.max(np.abs(d))), 1e-20)
         values = np.clip((20 * np.log10(np.maximum(np.abs(sampled) / ref, 1e-2)) + 40) / 40, 0, 1)
         rgb = colormaps["turbo"](values, bytes=True)[:, :, :3]
     else:
-        ref = max(float(np.percentile(np.abs(d), 99 if track == "grey" else 98)), 1e-20)
         grey = np.round(np.clip(sampled / ref * 0.5 + 0.5, 0, 1) * 255).astype(np.uint8)
         rgb = np.repeat(grey[:, :, None], 3, axis=2)
     buf = io.BytesIO()
     Image.fromarray(rgb).save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    png = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    # Bound frame/coverage variants; contrast references remain reusable for the current result.
+    if len(textures) >= 6:
+        textures.pop(next(iter(textures)))
+    textures[key] = png
+    return png
 
 
 def survey_scene(job: Any, frame: str = "gps", track: str = "grey") -> dict:

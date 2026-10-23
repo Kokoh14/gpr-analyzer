@@ -16,6 +16,8 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
+from gpr_analyzer.core import depth_from_time
+
 SCHEMA_VERSION = "0.1"
 
 CONFIDENCE_LEVELS = ("confirmed", "high", "medium", "low")
@@ -82,6 +84,7 @@ class Zone:
     review: str = "auto"
     note: str = ""
     ground_truth: dict[str, Any] | None = None  # {"method": "drill", "date": ..., "result": ...}
+    antenna_separation_m: float = 0.0
 
     def __post_init__(self) -> None:
         _check(self.suspected_type, ZONE_TYPES, "Zone.suspected_type")
@@ -102,20 +105,19 @@ class Zone:
         if self.coord_end is not None:
             self.coord_end = tuple(self.coord_end)
 
-    # Depth = v * t / 2 (two-way time).
     @property
     def depth_top_m(self) -> float:
-        return self.velocity_m_per_ns * self.time_top_ns / 2.0
+        return float(depth_from_time(self.time_top_ns, self.velocity_m_per_ns, self.antenna_separation_m))
 
     @property
     def depth_bottom_m(self) -> float:
-        return self.velocity_m_per_ns * self.time_bottom_ns / 2.0
+        return float(depth_from_time(self.time_bottom_ns, self.velocity_m_per_ns, self.antenna_separation_m))
 
     def depth_range_with_uncertainty(self) -> tuple[float, float]:
         """Shallowest top and deepest bottom once the velocity uncertainty is applied."""
         dv = self.velocity_uncertainty_m_per_ns or 0.0
-        return ((self.velocity_m_per_ns - dv) * self.time_top_ns / 2.0,
-                (self.velocity_m_per_ns + dv) * self.time_bottom_ns / 2.0)
+        return (float(depth_from_time(self.time_top_ns, self.velocity_m_per_ns - dv, self.antenna_separation_m)),
+                float(depth_from_time(self.time_bottom_ns, self.velocity_m_per_ns + dv, self.antenna_separation_m)))
 
     @property
     def length_m(self) -> float | None:
@@ -177,10 +179,16 @@ class LineResult:
     # Not serialised: processed data for figures. Any object with .data (samples, traces) and
     # .dt_ns works, normally gpr_analyzer.Radargram.
     radargram: Any = field(default=None, repr=False, compare=False)
+    antenna_separation_m: float = 0.0
+    figure_cache: dict | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.processing = [p if isinstance(p, ProcessingStep) else ProcessingStep(**p) for p in self.processing]
         self.zones = [z if isinstance(z, Zone) else Zone.from_dict(z) for z in self.zones]
+        if self.radargram is not None:
+            self.antenna_separation_m = getattr(self.radargram, "metadata", {}).get("antenna_separation_m") or 0.0
+        for z in self.zones:
+            z.antenna_separation_m = self.antenna_separation_m
         self.artifact_regions = [a if isinstance(a, ArtifactRegion) else ArtifactRegion(**a)
                                  for a in self.artifact_regions]
 
@@ -194,6 +202,7 @@ class LineResult:
             "n_traces": self.n_traces, "n_samples": self.n_samples, "dt_ns": self.dt_ns,
             "trace_spacing_m": self.trace_spacing_m,
             "velocity_m_per_ns": self.velocity_m_per_ns, "velocity_source": self.velocity_source,
+            "antenna_separation_m": self.antenna_separation_m,
             "processing": [asdict(p) for p in self.processing],
             "zones": [z.to_dict() for z in self.zones],
             "artifact_regions": [asdict(a) for a in self.artifact_regions],
@@ -201,7 +210,7 @@ class LineResult:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "LineResult":
-        known = {f.name for f in fields(cls)} - {"radargram"}
+        known = {f.name for f in fields(cls)} - {"radargram", "figure_cache"}
         return cls(**{k: v for k, v in d.items() if k in known})
 
 

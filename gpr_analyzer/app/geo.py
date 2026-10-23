@@ -18,6 +18,8 @@ from typing import Any
 
 import numpy as np
 
+from gpr_analyzer.core import depth_from_time
+
 EARTH_RADIUS_M = 6371008.8
 SLICE_FLOOR_DB = -40
 LIGHT_M_PER_NS = 0.299792458
@@ -58,7 +60,7 @@ def _groups(n: int, max_n: int) -> list[tuple[int, int]]:
 
 
 def energy_slices(envelope: np.ndarray, dt_ns: float, velocity_m_per_ns: float, n_bands: int = 40,
-                  max_traces: int = MAX_MAP_TRACES) -> dict[str, Any]:
+                  max_traces: int = MAX_MAP_TRACES, separation_m: float = 0.0) -> dict[str, Any]:
     """Strongest envelope per depth band and trace group, in whole dB from SLICE_FLOOR_DB to 0.
 
     envelope: (samples, traces) with time zero at row 0.
@@ -74,7 +76,7 @@ def energy_slices(envelope: np.ndarray, dt_ns: float, velocity_m_per_ns: float, 
         col = np.array([band[g0:g1].max() for g0, g1 in groups])
         db = 20.0 * np.log10(np.maximum(col / ref, 10 ** (SLICE_FLOOR_DB / 20.0)))
         bands.append([int(round(v)) for v in db])
-    depth = [round(float(e * dt_ns * velocity_m_per_ns / 2.0), 3) for e in edges]
+    depth = np.round(depth_from_time(edges * dt_ns, velocity_m_per_ns, separation_m), 3).tolist()
     return {"floor_db": SLICE_FLOOR_DB, "depth_edges_m": depth, "db": bands,
             "trace_groups": [[g0, g1 - 1] for g0, g1 in groups]}
 
@@ -90,7 +92,8 @@ def line_map(ln: Any) -> dict[str, Any]:
     if pos is None:
         return out
     lat, lon = pos
-    sl = energy_slices(res.envelope.data, a.dt_ns, res.velocity_m_per_ns)
+    sl = energy_slices(res.envelope.data, a.dt_ns, res.velocity_m_per_ns,
+                       separation_m=a.metadata.get("antenna_separation_m") or 0.0)
     centre = [(g0 + g1) // 2 for g0, g1 in sl["trace_groups"]]
     out.update({
         "has_gps": True,
@@ -151,6 +154,8 @@ def dielectric_points(lines: list[Any]) -> list[dict[str, Any]]:
             if not 0 <= tr < a.n_traces or any(s["trace_start"] <= tr <= s["trace_end"] for s in ln.sections):
                 continue
             item["points"].append({"trace": tr, "lat": round(float(lat[tr]), 7), "lon": round(float(lon[tr]), 7),
-                                   "depth_m": round(f.depth_m, 3), "velocity_m_per_ns": round(f.velocity_m_per_ns, 4),
+                                   "depth_m": round(float(depth_from_time(f.t0_ns, f.velocity_m_per_ns,
+                                                                         a.metadata.get("antenna_separation_m") or 0.0)), 3),
+                                   "velocity_m_per_ns": round(f.velocity_m_per_ns, 4),
                                    "eps_r": round(dielectric(f.velocity_m_per_ns), 1), "r2": round(f.r2, 3)})
     return out

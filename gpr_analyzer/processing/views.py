@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
-from gpr_analyzer.core import Radargram  # noqa: E402
+from gpr_analyzer.core import Radargram, depth_from_time, time_from_depth  # noqa: E402
 
 VIEWS = ("grey", "high_gain", "envelope", "viewpoint")
 
@@ -37,7 +37,9 @@ def _base(rg: Radargram, title: str, figsize=(10, 4.5)):
     ax.set_xlabel("Distance (m)" if rg.dx_m is not None else "Trace")
     ax.set_ylabel("Two-way time (ns)")
     v = rg.velocity_m_per_ns
-    sec = ax.secondary_yaxis("right", functions=(lambda tt: tt * v / 2.0, lambda d: 2.0 * d / v))
+    sep = rg.metadata.get("antenna_separation_m") or 0.0
+    sec = ax.secondary_yaxis("right", functions=(lambda tt: depth_from_time(tt, v, sep),
+                                                lambda d: time_from_depth(d, v, sep)))
     sec.set_ylabel(f"Depth (m) at v = {v:.3f} m/ns")
     ax.set_title(title, fontsize=10)
     return fig, ax, extent

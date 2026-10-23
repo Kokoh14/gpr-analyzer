@@ -141,20 +141,21 @@ def _lateral_coherence(d: np.ndarray, w: int, max_lag: int) -> np.ndarray:
     return uniform_filter1d(np.median(best, axis=1), w, mode="nearest")
 
 
-def detect_bottom_noise(r: Radargram, params: ArtifactParams | None = None) -> list[ArtifactFlag]:
+def detect_bottom_noise(r: Radargram, params: ArtifactParams | None = None, *,
+                        env: np.ndarray | None = None, period: int | None = None) -> list[ArtifactFlag]:
     p = params or ArtifactParams()
     d = r.data.astype(np.float64)
     n_s, n_t = d.shape
     if n_t < 4 or n_s < 20:
         return []
-    per = dominant_period_samples(d)
+    per = dominant_period_samples(d) if period is None else period
     w = max(3, 4 * per)
     coh = _lateral_coherence(d, w, max_lag=max(1, per // 3))
     coherent = np.flatnonzero(coh >= p.noise_coherence)
     s0 = int(coherent[-1]) + 1 if coherent.size else 0
     if n_s - s0 < p.noise_min_fraction * n_s:
         return []
-    m = uniform_filter1d(np.median(envelope(d), axis=1), max(3, per), mode="nearest")
+    m = uniform_filter1d(np.median(envelope(d) if env is None else env, axis=1), max(3, per), mode="nearest")
     region = m[s0:n_s - w]  # Hilbert edge effects inflate the last few samples
     if region.size < p.noise_min_fraction * n_s:
         return []
@@ -177,6 +178,7 @@ def detect_bottom_noise(r: Radargram, params: ArtifactParams | None = None) -> l
                   float(region[-1] / base))]
 
 
-def detect_artifacts(r: Radargram, params: ArtifactParams | None = None) -> list[ArtifactFlag]:
+def detect_artifacts(r: Radargram, params: ArtifactParams | None = None, *,
+                     env: np.ndarray | None = None, period: int | None = None) -> list[ArtifactFlag]:
     p = params or ArtifactParams()
-    return detect_vertical_stripes(r, p) + detect_abnormal_traces(r, p) + detect_bottom_noise(r, p)
+    return detect_vertical_stripes(r, p) + detect_abnormal_traces(r, p) + detect_bottom_noise(r, p, env=env, period=period)

@@ -30,6 +30,42 @@ def time_from_depth(depth_m, velocity_m_per_ns: float, separation_m: float = 0.0
     return 2.0 * h / velocity_m_per_ns
 
 
+def trace_bounds(n: int, dx_m: float | None, start_m: float | None, end_m: float | None) -> tuple[int, int]:
+    """Inclusive trace indices for a distance range, shared by eager and ranged readers."""
+    if not dx_m:
+        raise ValueError("this file has no trace spacing, so a distance range cannot be applied")
+    t0 = 0 if start_m is None else int(np.floor(max(start_m, 0.0) / dx_m))
+    t1 = n - 1 if end_m is None else int(np.ceil(end_m / dx_m))
+    t0, t1 = max(t0, 0), min(t1, n - 1)
+    if t1 - t0 < 10:
+        raise ValueError(f"range {start_m}–{end_m} m leaves fewer than 10 traces (line is {n * dx_m:.1f} m)")
+    return t0, t1
+
+
+def crop_metadata(metadata: dict[str, Any], t0: int, t1: int, n: int, dx_m: float) -> dict[str, Any]:
+    """Shift navigation/markers to a range, retaining GPS anchors just outside both ends."""
+    meta = dict(metadata)
+    gps = sorted(meta.get("gps") or [], key=lambda r: r["trace"])
+    if gps:
+        inside = [i for i, r in enumerate(gps) if t0 <= r["trace"] <= t1]
+        lo = max((inside[0] if inside else next((i for i, r in enumerate(gps) if r["trace"] > t1), len(gps))) - 1, 0)
+        hi = min((inside[-1] if inside else lo) + 1, len(gps) - 1)
+        meta["gps"] = [{**r, "trace": r["trace"] - t0} for r in gps[lo:hi + 1]]
+    if meta.get("markers"):
+        meta["markers"] = [{**m, "trace": m["trace"] - t0} for m in meta["markers"] if t0 <= m.get("trace", -1) <= t1]
+    if meta.get("dead_traces"):
+        meta["dead_traces"] = [t - t0 for t in meta["dead_traces"] if t0 <= t <= t1]
+    meta["crop"] = {"trace_start": t0, "trace_end": t1, "start_m": round(t0 * dx_m, 3),
+                    "end_m": round(t1 * dx_m, 3), "n_traces_file": n}
+    return meta
+
+
+def crop_to_range(rg: "Radargram", start_m: float | None, end_m: float | None) -> tuple["Radargram", int]:
+    t0, t1 = trace_bounds(rg.n_traces, rg.dx_m, start_m, end_m)
+    return rg.copy_with(data=np.ascontiguousarray(rg.data[:, t0:t1 + 1]),
+                        metadata=crop_metadata(rg.metadata, t0, t1, rg.n_traces, rg.dx_m)), t0
+
+
 @dataclass
 class Radargram:
     """One GPR profile (B-scan).

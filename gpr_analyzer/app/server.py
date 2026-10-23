@@ -151,7 +151,8 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
     def get_scene3d(job_id: str, frame: str = "gps", track: str = "grey") -> dict:
         j = job(job_id)
         with j.lock:
-            return guarded(scene3d.survey_scene, j, frame, track)
+            frozen = scene3d.snapshot(j)
+        return guarded(scene3d.survey_scene, frozen, frame, track)
 
     @app.put("/api/jobs/{job_id}/scene3d/layout")
     def set_scene3d_layout(job_id: str, body: dict = Body(...)) -> dict:

@@ -147,7 +147,8 @@ def test_auto_process_hook_for_report(scene):
     assert out.n_traces == rg.n_traces and out.metadata["track"] == "analysis"
     assert out.metadata["velocity_source"] == "hyperbola_fit"
     assert out.metadata["processing"] == steps
-    assert [s["name"] for s in steps] == STEPS
+    # The report hook requests the analysis track only; do not claim display/attribute steps ran.
+    assert [s["name"] for s in steps] == STEPS[:-3]
     for s in steps:
         assert set(s) == {"name", "params", "auto"} and s["auto"] is True and s["params"]["reason"]
     json.dumps(steps)  # report serialises them

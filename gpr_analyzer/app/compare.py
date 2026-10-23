@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from gpr_analyzer.core import depth_from_time, time_from_depth
+
 SOURCES = {"viewpoint": "ViewPoint", "geolitix": "GeoLitix"}
 # Older saved jobs used these names; they are read as ViewPoint (the software of the user's ImpulseRadar unit).
 LEGACY_SOURCES = {"subscan": "viewpoint", "other": "viewpoint"}
@@ -84,6 +86,7 @@ class LineGeom:
     time_window_ns: float
     velocity_m_per_ns: float
     offset_traces: int = 0  # first trace of a line processed over a distance range; reference metres are from the line start
+    antenna_separation_m: float = 0.0
 
     def trace(self, x: float, unit: str) -> float:
         if unit == "trace":
@@ -93,10 +96,10 @@ class LineGeom:
         return x / self.dx_m - self.offset_traces
 
     def ns(self, y: float, unit: str, velocity: float | None) -> float:
-        return y if unit == "ns" else 2.0 * y / (velocity or self.velocity_m_per_ns)
+        return y if unit == "ns" else float(time_from_depth(y, velocity or self.velocity_m_per_ns, self.antenna_separation_m))
 
     def depth(self, ns: float) -> float:
-        return ns * self.velocity_m_per_ns / 2.0
+        return float(depth_from_time(ns, self.velocity_m_per_ns, self.antenna_separation_m))
 
 
 def clean_pick(d: dict[str, Any], ref_id: str) -> dict[str, Any]:

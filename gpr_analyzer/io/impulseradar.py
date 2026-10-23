@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from gpr_analyzer.core import Radargram
+from gpr_analyzer.core import Radargram, trace_bounds, crop_metadata
 from gpr_analyzer.io._util import parse_key_value_header, read_text, sibling, to_float
 
 _CHANNEL_NAMES = {"0": "high frequency", "1": "low frequency"}
@@ -43,20 +43,17 @@ def _side_file(data_path: Path, suffix: str) -> Path | None:
     return None
 
 
-def _read_pair(header_path: Path, data_path: Path, bytes_per_sample: int, fmt: str) -> Radargram:
+def _read_pair(header_path: Path, data_path: Path, bytes_per_sample: int, fmt: str,
+               range_m: tuple[float | None, float | None] | None = None) -> Radargram:
     header = parse_key_value_header(read_text(header_path))
     n_samples = int(to_float(header.get("SAMPLES")) or 0)
     if n_samples <= 0:
         raise ValueError(f"{header_path}: SAMPLES missing or zero")
 
-    raw = np.fromfile(data_path, dtype=f"<i{bytes_per_sample}")
-    n_traces, rest = divmod(raw.size, n_samples)
+    n_values = data_path.stat().st_size // bytes_per_sample
+    n_traces, rest = divmod(n_values, n_samples)
     if n_traces == 0:
-        raise ValueError(f"{data_path}: no complete trace in the file ({raw.size} samples, {n_samples} per trace)")
-    if rest:
-        # Partial last trace (e.g. recording stopped mid-write): drop it, keep the note.
-        raw = raw[: n_traces * n_samples]
-    data = raw.reshape(n_traces, n_samples).T.astype(np.float32)
+        raise ValueError(f"{data_path}: no complete trace in the file ({n_values} samples, {n_samples} per trace)")
 
     # FREQUENCY is the sampling frequency in MHz.
     fs_mhz = to_float(header.get("FREQUENCY"))
@@ -77,6 +74,10 @@ def _read_pair(header_path: Path, data_path: Path, bytes_per_sample: int, fmt: s
             dx = v
             break
 
+    lo, hi = trace_bounds(n_traces, dx, *range_m) if range_m is not None else (0, n_traces - 1)
+    raw = np.fromfile(data_path, dtype=f"<i{bytes_per_sample}", count=(hi - lo + 1) * n_samples,
+                       offset=lo * n_samples * bytes_per_sample)
+    data = raw.reshape(hi - lo + 1, n_samples).T.astype(np.float32)
     meta = {
         "format": fmt,
         "source": str(data_path),
@@ -85,7 +86,7 @@ def _read_pair(header_path: Path, data_path: Path, bytes_per_sample: int, fmt: s
         "n_traces_from_header": to_float(header.get("LAST TRACE")),
         "partial_trace_dropped": bool(rest),
         # all-zero traces (CrossOver lines usually start with one)
-        "dead_traces": [int(i) for i in np.where(np.ptp(data, axis=0) == 0)[0]],
+        "dead_traces": [int(i) + lo for i in np.where(np.ptp(data, axis=0) == 0)[0]],
     }
     f_nominal = to_float(header.get("ANTENNA") or header.get("ANTENNAS"))
     if f_nominal and f_nominal > 0:
@@ -108,6 +109,8 @@ def _read_pair(header_path: Path, data_path: Path, bytes_per_sample: int, fmt: s
         marks = read_mrk(mrk)
         if marks:
             meta["markers"] = marks
+    if range_m is not None:
+        meta = crop_metadata(meta, lo, hi, n_traces, dx)
     # SOIL VELOCITY is the field velocity in m/us (CrossOver spec); 0 or missing = not set
     v_soil = to_float(header.get("SOIL VELOCITY"))
     if v_soil and 10.0 <= v_soil <= 300.0:
@@ -116,7 +119,7 @@ def _read_pair(header_path: Path, data_path: Path, bytes_per_sample: int, fmt: s
     return Radargram(data, dt_ns=dt_ns, dx_m=dx, metadata=meta)
 
 
-def read_impulseradar(path: str | Path) -> list[Radargram]:
+def read_impulseradar(path: str | Path, *, range_m: tuple[float | None, float | None] | None = None) -> list[Radargram]:
     """Read one ImpulseRadar profile from its .iprh or .iprb file."""
     path = Path(path)
     header_path = path if path.suffix.lower() == ".iprh" else sibling(path, ".iprh")
@@ -125,10 +128,10 @@ def read_impulseradar(path: str | Path) -> list[Radargram]:
     version = int(to_float(header.get("DATA VERSION")) or 16)
     if version not in (16, 32):
         raise ValueError(f"{header_path}: unsupported DATA VERSION {version}")
-    return [_read_pair(header_path, data_path, version // 8, "impulseradar")]
+    return [_read_pair(header_path, data_path, version // 8, "impulseradar", range_m)]
 
 
-def read_mala(path: str | Path) -> list[Radargram]:
+def read_mala(path: str | Path, *, range_m: tuple[float | None, float | None] | None = None) -> list[Radargram]:
     """Read a MALA profile: .rad header + .rd3 (int16) or .rd7 (int32) data."""
     path = Path(path)
     header_path = path if path.suffix.lower() == ".rad" else sibling(path, ".rad")
@@ -140,7 +143,7 @@ def read_mala(path: str | Path) -> list[Radargram]:
         except FileNotFoundError:
             data_path = sibling(path, ".rd7")
     nbytes = 2 if data_path.suffix.lower() == ".rd3" else 4
-    return [_read_pair(header_path, data_path, nbytes, "mala")]
+    return [_read_pair(header_path, data_path, nbytes, "mala", range_m)]
 
 
 def read_cor(path: str | Path) -> list[dict]:
