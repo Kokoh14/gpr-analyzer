@@ -13,6 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from gpr_analyzer.app import geo
 from gpr_analyzer.app.files import safe_name
 from gpr_analyzer.app.compare import TEMPLATE_CSV
 from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
@@ -93,6 +94,18 @@ def create_app(workdir: Path) -> FastAPI:
             raise HTTPException(404, "unknown view")
         png = guarded(lambda: job(job_id).line(line_id).png(view))
         return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/jobs/{job_id}/lines/{line_id}/map.json")
+    def line_map(job_id: str, line_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            return guarded(lambda: geo.line_map(j.line(line_id)))
+
+    @app.get("/api/jobs/{job_id}/map.json")
+    def job_map(job_id: str) -> list[dict]:
+        j = job(job_id)
+        with j.lock:
+            return geo.job_overview(j.lines)
 
     @app.post("/api/jobs/{job_id}/lines/{line_id}/zones/{zone_id}/review")
     def review(job_id: str, line_id: str, zone_id: str, body: dict = Body(...)) -> dict:

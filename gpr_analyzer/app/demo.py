@@ -1,8 +1,8 @@
 """Synthetic survey for trying the app without real files.
 
 Writes two ImpulseRadar .iprh/.iprb pairs (plus a .txt note) so the demo goes through the
-same upload path as real data from the user's main unit. Line 1 is shaped like the SubScan
-sample (555 traces, ~145 ns, vertical stripes) with pipes, a dipping layer and an air-filled
+same upload path as real data from the user's main unit. Line 1 is a 555-trace,
+~145 ns line with vertical stripes with pipes, a dipping layer and an air-filled
 cavity; line 2 is a quieter line with two pipes.
 """
 
@@ -72,11 +72,32 @@ def write_impulseradar(rg: Radargram, stem: Path) -> list[Path]:
     return [hdr, dat]
 
 
+# Made-up GPS start point and heading per demo line (two parallel passes along a street in Bangkok).
+DEMO_GPS = {"DEMO_LINE01": (13.738600, 100.531000, 80.0), "DEMO_LINE02": (13.738520, 100.531020, 80.0)}
+
+
+def write_cor(rg: Radargram, path: Path, lat0: float, lon0: float, heading_deg: float, every: int = 10) -> Path:
+    """ImpulseRadar-style .cor GPS file: trace, date, time, lat, N/S, lon, E/W, elevation (one fix per `every` traces)."""
+    dx = rg.dx_m or 0.05
+    m_lat = 111_320.0
+    m_lon = m_lat * np.cos(np.radians(lat0))
+    h = np.radians(heading_deg)
+    rows = []
+    for i, tr in enumerate(range(0, rg.n_traces, every)):
+        d = tr * dx
+        lat = lat0 + d * np.cos(h) / m_lat + 2e-7 * np.sin(i / 3.0)  # small GPS wobble
+        lon = lon0 + d * np.sin(h) / m_lon
+        rows.append(f"{tr}\t2026-10-21\t09:00:{i % 60:02d}.000\t{lat:.8f}\tN\t{lon:.8f}\tE\t2.10\tM\t1")
+    path.write_text("\n".join(rows) + "\n", encoding="latin-1")
+    return path
+
+
 def write_demo_files(folder: Path) -> list[Path]:
     folder.mkdir(parents=True, exist_ok=True)
     paths = []
     for stem, rg in demo_lines():
         paths += write_impulseradar(rg, folder / stem)
+        paths.append(write_cor(rg, folder / f"{stem}.cor", *DEMO_GPS[stem]))
     note = folder / "DEMO_LINE01.txt"
     note.write_text("Synthetic demo line (not field data)\nAntenna: 250 MHz (simulated)\n"
                     "Traces: 555, time window 145 ns, trace spacing 0.05 m\n", encoding="utf-8")

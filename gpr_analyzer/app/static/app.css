@@ -83,10 +83,31 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--bg
 .yaxis .ttl { top: 50%; writing-mode: vertical-rl; transform: translateY(-50%) rotate(180deg); }
 .yaxis.left .ttl { left: 0; right: auto; } .yaxis.right .ttl { right: 0; left: auto; transform: translateY(-50%); }
 .imgwrap { position: relative; height: 210px; overflow: hidden; border: 1px solid var(--line); cursor: crosshair; user-select: none; }
-.imgwrap img { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: auto; }
-.xaxis { position: relative; height: 30px; margin: 0 44px; font-size: 10px; color: var(--muted); }
+.imgwrap img { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: auto; pointer-events: none; }
+.zoomer { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.imgwrap { cursor: grab; } .imgwrap:active { cursor: grabbing; }
+.guide.vline { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid #e8590c; pointer-events: none; }
+.guide.hband { position: absolute; left: 0; right: 0; border-top: 1px dashed #ffd43b; border-bottom: 1px dashed #ffd43b;
+  background: rgba(255, 212, 59, .12); pointer-events: none; }
+.zoombar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 8px 0 2px; }
+.view-toggles { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.btn.small { padding: 2px 8px; font-size: 13px; }
+.mapcard { margin: 8px 0; padding: 8px 10px; }
+.mapcard summary { cursor: pointer; font-weight: 600; }
+.map-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 6px 0; font-size: 13px; }
+.map-tools label { display: flex; gap: 6px; align-items: center; } .map-tools select { width: auto; }
+.map-tools .slider input { width: 140px; padding: 0; }
+.mapwrap { position: relative; }
+#map { height: 340px; border-radius: 6px; border: 1px solid var(--line); background: #1b2129; }
+.map-msg { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 500; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font-size: 13px; }
+.map-legend { margin-top: 4px; line-height: 1.6; }
+.zlabel { font: 700 11px system-ui, sans-serif; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap;
+  transform: translate(-50%, -150%); }
+.leaflet-container { font: inherit; }
+.xaxis { position: relative; height: 42px; margin: 0 44px; font-size: 10px; color: var(--muted); }
 .xaxis span { position: absolute; transform: translateX(-50%); top: 2px; white-space: nowrap; }
-.xaxis .ttl { left: 50%; top: 16px; }
+.xaxis .ttl { left: 50%; top: 27px; }
 .zbox { position: absolute; border: 2px solid var(--c); box-shadow: 0 0 0 1px rgba(0,0,0,.55); cursor: pointer; }
 .zbox .lbl { position: absolute; left: -2px; top: -16px; background: var(--c); color: #fff; font-size: 10px; padding: 0 4px; border-radius: 3px 3px 0 0; white-space: nowrap; }
 .zbox.sel { border-width: 3px; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,.6); z-index: 2; }

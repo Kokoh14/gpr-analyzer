@@ -207,7 +207,7 @@ def sec_gain_curve(
     The decay rate is a least-squares fit of log(level) against time between the
     level's peak and the last sample still above floor_factor x noise floor (the
     cap). Below the cap the gain stops growing, so noise at the bottom of the
-    section (the red band at 120-140 ns in the SubScan sample) is not boosted.
+    section (e.g. a noisy band at 120-140 ns) is not boosted.
     Returns (gain per sample, cap sample, decay rate in dB/ns).
     """
     n = decay.size

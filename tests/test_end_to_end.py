@@ -1,7 +1,7 @@
 """File → io.read → processing.auto_process → detect.detect_zones → report, on the synthetic
-SubScan-like line written in every format the readers support.
+Field-like line written in every format the readers support.
 
-The line (gpr_analyzer.synthetic.subscan_like_line) has known answers: v = 0.135 m/ns, a void-like
+The line (gpr_analyzer.synthetic.field_like_line) has known answers: v = 0.135 m/ns, a void-like
 cavity under traces 150–300 with its roof at 5.25 m, a pipe at 3 m and a stripe band at traces 365–385.
 These tests only prove the stages fit together and agree with the synthetic truth; no real file has
 been through them yet.
@@ -17,7 +17,7 @@ from gpr_analyzer.io import read
 from gpr_analyzer.io.sniff import sniff, to_radargram
 from gpr_analyzer.io.writers import write
 from gpr_analyzer.report.schema import SurveyInfo
-from gpr_analyzer.synthetic import subscan_like_line
+from gpr_analyzer.synthetic import field_like_line
 
 FORMATS = ["LINE001.iprb", "LINE001.rd3", "FILE____001.DZT", "LINE00.DT1", "line001.sgy"]
 CAVITY = (150, 300)
@@ -27,7 +27,7 @@ STRIPES = (365, 385)
 
 @pytest.fixture(scope="module")
 def scene():
-    return subscan_like_line()
+    return field_like_line()
 
 
 def _check_line(ln, truth, dx_m=0.05):
@@ -78,12 +78,12 @@ def test_format_round_trip_and_pipeline(tmp_path, scene, name):
 
 
 def test_unknown_format_via_sniffer(tmp_path, scene):
-    """The SubScan path: an undocumented binary is sniffed with the trace count from the screen,
+    """The unknown-format path: an undocumented binary is sniffed with the trace count from the screen,
     then goes through the same stages."""
     rg, truth = scene
     data = np.round(rg.data / np.abs(rg.data).max() * 20000).astype(">i2")
     p = tmp_path / "LINE001.sub"
-    p.write_bytes(b"SUBSCAN-LIKE TEST FILE".ljust(512, b"\0") + data.T.tobytes())
+    p.write_bytes(b"UNKNOWN-FORMAT TEST FILE".ljust(512, b"\0") + data.T.tobytes())
     _, cands = sniff(p, n_traces=555, top=10)
     best = cands[0]
     # the stride and sample type are found; the leading quiet samples before time zero can be

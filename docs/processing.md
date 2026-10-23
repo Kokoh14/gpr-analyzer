@@ -56,7 +56,7 @@ Each figure shows distance, two-way time and depth at the pipeline velocity.
 
 ## Synthetic data
 
-`gpr_analyzer.synthetic.make_scene()` builds a 555-trace, 145 ns line like the SubScan
+`gpr_analyzer.synthetic.make_scene()` builds a 555-trace, 145 ns line like an early
 sample with known truth: point diffractors, dipping layer, direct wave with time-zero
 jitter, ringing band at 35 ns, vertical-stripe artifacts at traces 200/240/260/310/365–385,
 wow, attenuation and noise. `single_hyperbola()` gives a clean diffraction for velocity and

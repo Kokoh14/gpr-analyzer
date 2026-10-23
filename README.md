@@ -19,7 +19,7 @@ and produce a report.
 ## Windows (no programming tools needed)
 
 Download the ZIP, unpack it, double-click `START-GPR-ANALYZER.bat`. Thai guide for testing with real files and
-comparing against SubScan / GeoLitix: [`docs/windows-testing.md`](docs/windows-testing.md).
+comparing against ViewPoint / GeoLitix: [`docs/windows-testing.md`](docs/windows-testing.md).
 
 ## Development
 
@@ -30,7 +30,9 @@ pytest
 
 ## Rules
 
-- **Clean-room** for SubScan: we only decode our own data files and compare against what SubScan shows on screen.
-  Never read or disassemble SubScan code or touch its licensing.
+- Input is ImpulseRadar (`.iprh` + `.iprb`, with `.cor` GPS and `.mrk` markers); reference software is ImpulseRadar
+  ViewPoint and GeoLitix.
+- **Clean-room** for reference software: we only decode our own data files and compare against what the programs
+  show on screen or export. Never read or disassemble their code or touch their licensing.
 - GPL projects (readgssi, RGPR) are reference only; do not copy code. GPRPy is MIT.
 - No uncalibrated percentages: confidence is High / Medium / Low with reasons until ground-truth data exists.

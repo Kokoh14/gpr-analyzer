@@ -100,7 +100,7 @@ def make_scene(
     seed: int = 0,
     cavities: list[Cavity] | None = None,
 ) -> tuple[Radargram, SyntheticTruth]:
-    """Build a radargram resembling the SubScan sample line (555 traces, ~145 ns).
+    """Build a radargram resembling an early sample line (555 traces, ~145 ns).
 
     Events, all with known parameters:
     - direct wave at time_zero_ns with per-trace jitter (time-zero correction test)
@@ -232,8 +232,8 @@ def single_hyperbola(
     )
 
 
-def subscan_like_line(seed: int = 7) -> tuple[Radargram, SyntheticTruth]:
-    """The end-to-end demo line: shaped like the SubScan sample (555 traces at 5 cm, ~145 ns, 250 MHz,
+def field_like_line(seed: int = 7) -> tuple[Radargram, SyntheticTruth]:
+    """The end-to-end demo line: shaped like an early sample line (555 traces at 5 cm, ~145 ns, 250 MHz,
     v = 0.135 m/ns) with a pipe, a layer, a void-like cavity near traces 150-300 at about 5 m and the
     stripe band around traces 365-385 seen on the sample screen."""
     return make_scene(

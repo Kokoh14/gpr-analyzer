@@ -31,9 +31,9 @@ def write_unknown(path, data, header=b"", trace_header=0, dtype=">i2"):
 
 
 def test_text_runs_finds_ascii_and_utf16():
-    raw = b"\x00\x01SubScan TEST\x00\x00" + "Derinlik".encode("utf-16-le") + b"\xff"
+    raw = b"\x00\x01Vendor TEST\x00\x00" + "Derinlik".encode("utf-16-le") + b"\xff"
     found = {(r.text, r.encoding) for r in text_runs(raw)}
-    assert ("SubScan TEST", "latin-1") in found and ("Derinlik", "utf-16-le") in found
+    assert ("Vendor TEST", "latin-1") in found and ("Derinlik", "utf-16-le") in found
 
 
 def test_candidates_fit_file_size():

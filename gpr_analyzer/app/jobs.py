@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from gpr_analyzer.app import compare as cmp
+from gpr_analyzer.app import geo
 from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
 from gpr_analyzer.core import Radargram
 from gpr_analyzer.detect import analyze_line, to_report_records
@@ -31,7 +32,7 @@ from gpr_analyzer.report.schema import (ACTION_LEVELS, CONFIDENCE_LEVELS, SURFAC
                                         Evidence, LineResult, ProcessingStep, SurveyInfo, SurveyResult, Zone)
 
 APP_VERSION = "0.1"
-VIEWS = ("grey", "high_gain", "envelope")
+VIEWS = ("grey", "high_gain", "envelope", "viewpoint")
 EDITABLE = ("trace_start", "trace_end", "time_top_ns", "time_bottom_ns", "suspected_type", "confidence", "action",
             "note")
 # Processing options the screen exposes; everything else stays automatic.
@@ -89,7 +90,7 @@ class LineState:
     zones: list[Zone] = field(default_factory=list)
     artifact_regions: list[ArtifactRegion] = field(default_factory=list)
     auto_zones: dict[str, dict[str, Any]] = field(default_factory=dict)  # as proposed, for the labels
-    _png: dict[str, bytes] = field(default_factory=dict, repr=False)
+    _cache: dict[str, Any] = field(default_factory=dict, repr=False)  # PNGs and GPS positions
 
     # ------------------------------------------------------------------ processing
     def process(self) -> None:
@@ -101,7 +102,7 @@ class LineState:
         self.zones = [Zone.from_dict(z) for z in zones]
         self.artifact_regions = [ArtifactRegion(**a) for a in regions]
         self.auto_zones = {z.zone_id: z.to_dict() for z in self.zones}
-        self._png.clear()
+        self._cache.clear()
 
     @property
     def analysis(self) -> Radargram:
@@ -115,12 +116,32 @@ class LineState:
         raise KeyError(zone_id)
 
     # ------------------------------------------------------------------ images
+    def views(self) -> list[str]:
+        return [v for v in VIEWS if v != "viewpoint" or self.result.viewpoint is not None]
+
+    def positions(self) -> tuple[np.ndarray, np.ndarray] | None:
+        """(lat, lon) per trace from the .cor GPS, or None."""
+        if "positions" not in self._cache:
+            self._cache["positions"] = geo.trace_positions(self.raw.metadata.get("gps"), self.analysis.n_traces)
+        return self._cache["positions"]
+
+    def with_coords(self, z: Zone) -> Zone:
+        """Zone with WGS84 start/end coordinates from the GPS track, when the line has one."""
+        pos = self.positions()
+        if pos is None or z.coord_start is not None:
+            return z
+        lat, lon = pos
+        n = len(lat) - 1
+        i0, i1 = min(max(z.trace_start, 0), n), min(max(z.trace_end, 0), n)
+        return _replace(z, coord_start=(float(lon[i0]), float(lat[i0])), coord_end=(float(lon[i1]), float(lat[i1])),
+                        datum="WGS84")
+
     def png(self, view: str) -> bytes:
-        if view not in VIEWS:
+        if view not in self.views():
             raise KeyError(view)
-        if view not in self._png:
-            self._png[view] = render_png(self.result, view)
-        return self._png[view]
+        if view not in self._cache:
+            self._cache[view] = render_png(self.result, view)
+        return self._cache[view]
 
     def line_result(self) -> LineResult:
         res = self.result
@@ -128,7 +149,7 @@ class LineState:
             line_id=self.line_id, source_file=self.source_file, n_traces=res.analysis.n_traces,
             n_samples=res.analysis.n_samples, dt_ns=res.analysis.dt_ns, trace_spacing_m=res.analysis.dx_m,
             velocity_m_per_ns=res.velocity_m_per_ns, velocity_source=res.velocity_source_code,
-            processing=[ProcessingStep(**s) for s in res.report_steps()], zones=list(self.zones),
+            processing=[ProcessingStep(**s) for s in res.report_steps()], zones=[self.with_coords(z) for z in self.zones],
             artifact_regions=list(self.artifact_regions), radargram=res.analysis)
 
     def to_json(self, surface_use: str) -> dict[str, Any]:
@@ -143,7 +164,8 @@ class LineState:
         return {
             "line_id": self.line_id, "source_file": self.source_file, "channel": self.channel,
             "n_traces": a.n_traces, "n_samples": a.n_samples, "dt_ns": a.dt_ns, "dx_m": a.dx_m,
-            "time_window_ns": a.n_samples * a.dt_ns,
+            "time_window_ns": a.n_samples * a.dt_ns, "views": self.views(),
+            "has_gps": self.positions() is not None,
             "velocity_m_per_ns": res.velocity_m_per_ns, "velocity_source": res.velocity_source,
             "velocity_source_code": res.velocity_source_code,
             "hyperbola_fits": len(res.hyperbola_fits),
@@ -175,6 +197,13 @@ def render_png(res: ProcessingResult, view: str) -> bytes:
     if view == "grey":
         d = res.analysis.data
         c = float(np.percentile(np.abs(d), 99.0)) or 1.0
+        img, cmap, lo, hi = d, "gray", -c, c
+    elif view == "viewpoint":
+        n = res.analysis.n_samples  # same time zero as the analysis track; match its rows so boxes line up
+        d = res.viewpoint.data[:n]
+        if d.shape[0] < n:
+            d = np.vstack([d, np.zeros((n - d.shape[0], d.shape[1]), dtype=d.dtype)])
+        c = float(np.percentile(np.abs(d), 98.0)) or 1.0
         img, cmap, lo, hi = d, "gray", -c, c
     elif view == "high_gain":
         d = res.display.data
@@ -365,7 +394,7 @@ class Job:
         job = cls(job_id=st["job_id"], folder=folder, created=st.get("created", _now()))
         job.info = SurveyInfo(**{k: v for k, v in st.get("info", {}).items() if k in {f.name for f in fields(SurveyInfo)}})
         job.lang, job.reviewer = st.get("lang", "bi"), st.get("reviewer", "")
-        job.comparison = st.get("comparison") or cmp.new_state()
+        job.comparison = cmp.upgrade_state(st.get("comparison") or cmp.new_state())
         job.load(sorted(p for p in job.upload_dir.iterdir() if p.is_file()))
         saved = {d["line_id"]: d for d in st.get("lines", [])}
         for ln in job.lines:

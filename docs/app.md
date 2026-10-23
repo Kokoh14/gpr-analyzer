@@ -15,8 +15,11 @@ same name) → each line is read, processed (`processing.run_pipeline`) and scan
 automatically → review screen.
 
 Review screen:
-- three views of the same line on one grid: grey (amplitude-preserving, used for scoring), high gain (AGC,
-  display only), envelope colour with a dB legend and the note "red = strong reflection, not a void";
+- views of the same line on one grid: grey (amplitude-preserving, used for scoring), high gain (AGC,
+  display only), envelope colour with a dB legend and the note "red = strong reflection, not a void", and the
+  ViewPoint-style screen (`processing/viewpoint.py`, off by default, tick it to compare with the unit's software);
+- zoom shared by every view: mouse wheel (Shift = distance axis only), drag to pan, drag a zoom box, double-click
+  for the whole line; the axes follow the zoom;
 - zone boxes coloured by suspected type, hatched artifact regions, time/depth/trace/distance read-out;
 - zone cards with ✓ / ✗ / ⚠ evidence, confidence (high/medium/low, never %), suggested action level;
 - accept / edit (form or re-draw the box) / reject / reset, and drawing new zones the detector missed;
@@ -33,7 +36,25 @@ comparison data). The start page lists earlier jobs; opening one re-reads its up
 saved options and puts the zones and reviews back. Reprocessing a line clears its reviews (they stay in the
 labels file).
 
-## Comparing with licensed software (SubScan, GeoLitix)
+## Map (top view)
+
+`gpr_analyzer/app/geo.py`, laid out after IDS AiMaps. When a line has a `.cor` GPS file, every trace gets a
+position (interpolated between fixes) and the map shows:
+
+- every line of the job (click one to open it), start/end points and `.mrk` markers;
+- the open line coloured by a top-view energy slice: for the chosen depth band, the strongest Hilbert envelope
+  per trace in dB below the line's maximum, with a hide-below threshold and Jet / Hot / grey colours. This is
+  relative energy for finding things on the map, not a probability; confidence stays high/medium/low;
+- zones along the track (dashed until reviewed), clickable to select them.
+
+Clicking the map moves the radargrams to that trace; clicking a radargram picks the slice depth and shows the
+point on the map. Zones in the report and CSV get WGS84 start/end coordinates from the same track.
+
+Basemaps are online tiles: Esri World Imagery (satellite) and OpenStreetMap, with their attribution on the map.
+Without internet the tracks, slice and scale bar still show on a blank background. Leaflet 1.9.4 (BSD-2) is
+bundled in `static/vendor/leaflet/` so the page needs no CDN.
+
+## Comparing with reference software (ViewPoint, GeoLitix)
 
 `gpr_analyzer/app/compare.py`. The licensed programs are black-box references: we only use what the user
 exports or reads off their screens. Per line the user can

@@ -72,7 +72,7 @@ first, not calibrated probabilities, and every value used is stored in `risk.par
 ## Known limits
 
 - Tuned on synthetic data only (tests/detect_synth.py and the processing thread's scene).
-  Real ImpulseRadar / SubScan lines will need threshold checks.
+  Real ImpulseRadar lines will need threshold checks.
 - Polarity check needs the direct wave in the input; on background-removed data it is
   `not_assessed` unless `DetectParams(surface_polarity=±1)` is given.
 - Single 2-D line: width is along the line only; area and shape need cross lines.

@@ -19,6 +19,7 @@ const VIEWS = [
   ["grey", "ขาวดำ (รักษาแอมพลิจูด ใช้ให้คะแนน)", ""],
   ["high_gain", "Gain สูง (AGC ใช้ดูเท่านั้น)", "สี = ขั้วสัญญาณ แอมพลิจูดเทียบกันข้ามภาพไม่ได้"],
   ["envelope", "พลังงานสะท้อน (Hilbert envelope)", "สีแดง = สะท้อนแรง ไม่ได้แปลว่าเป็นโพรง"],
+  ["viewpoint", "แบบหน้าจอ ViewPoint (ImpulseRadar)", "เลียนแบบภาพของ ViewPoint ใช้เทียบกับโปรแกรมของเครื่อง ใช้ดูเท่านั้น"],
 ];
 const FAMILY = { iprh: "header", iprb: "data", rad: "header", rd3: "data", rd7: "data", hd: "header", dt1: "data", dzt: "data", sgy: "data", segy: "data" };
 const COMPANION = ["txt", "cor", "gps", "csv", "xml", "ini", "json", "log", "tmf", "mrk"];
@@ -30,7 +31,14 @@ const RATING = { better: "ดีกว่า", same: "พอ ๆ กัน", wor
 const META = { n_traces: "จำนวน trace", time_window_ns: "Time window (ns)", length_m: "ความยาวเส้น (m)",
   velocity_m_per_ns: "ความเร็วคลื่น (m/ns)", max_depth_m: "ความลึกสูงสุด (m)" };
 
-const S = { files: [], job: null, line: null, sel: null, editing: null, drawFor: null };
+const ZOOM_DRAW = "__zoom__";  // S.drawFor value while dragging a zoom box
+const S = { files: [], job: null, line: null, sel: null, editing: null, drawFor: null,
+  view: { x0: 0, x1: 1, y0: 0, y1: 1 }, cursor: null, hidden: new Set(store("hiddenViews", ["viewpoint"])) };
+
+function store(key, dflt) {  // per-browser preferences; the page works without them
+  try { const v = localStorage.getItem("gpr." + key); return v == null ? dflt : JSON.parse(v); } catch (e) { return dflt; }
+}
+function keep(key, v) { try { localStorage.setItem("gpr." + key, JSON.stringify(v)); } catch (e) { /* private mode */ } }
 
 function toast(msg) {
   const t = $("#toast"); t.textContent = msg; t.hidden = false;
@@ -55,7 +63,7 @@ function role(name) {
   if (FAMILY[ext] === "data") return ["ข้อมูล GPR", "data"];
   if (FAMILY[ext] === "header") return ["header (คู่กับไฟล์ข้อมูล)", "data"];
   if (COMPANION.includes(ext)) return ["ไฟล์ประกอบ", ""];
-  return ["ยังไม่รู้จัก (เช่น SubScan) จะลองแล้วแจ้งผล", "bad"];
+  return ["ยังไม่รู้จักรูปแบบ จะลองแล้วแจ้งผล", "bad"];
 }
 function renderFiles() {
   const tb = $("#fileList tbody");
@@ -116,6 +124,7 @@ function openReview() {
   S.line = S.job.lines[0]?.line_id || null;
   buildInfoForm();
   render();
+  M.load();
 }
 const line = () => S.job.lines.find((l) => l.line_id === S.line);
 const zoneOf = (id) => line()?.zones.find((z) => z.zone_id === id);
@@ -138,7 +147,7 @@ function renderLines() {
       <span class="small muted">${l.zones.length} โซน${todo ? ` · รอตรวจ ${todo}` : " · ตรวจครบ"}</span></li>`;
   }).join("") || `<li class="muted">ไม่มีเส้นที่อ่านได้</li>`;
   const probs = [...S.job.problems.map((p) => p.error === "unknown_format"
-      ? `${esc(p.file)}: ยังอ่านรูปแบบนี้ไม่ได้ ใช้คำสั่ง gpr-sniff ช่วยถอดรูปแบบ (เช่น --traces 555)`
+      ? `${esc(p.file)}: ยังอ่านรูปแบบนี้ไม่ได้ (โปรแกรมรับไฟล์ ImpulseRadar .iprh + .iprb เป็นหลัก)`
       : `${esc(p.file)}: ${esc(p.error)}`),
     ...S.job.unassigned.map((u) => `${esc(u.name)}: ไม่มีไฟล์ข้อมูลชื่อเดียวกัน (ไม่ได้ใช้)`)];
   $("#problems").innerHTML = probs.map((p) => `<div class="problem">⚠ ${p}</div>`).join("");
@@ -153,17 +162,21 @@ function renderLine() {
     · ระยะ trace ${l.dx_m ? fmt(l.dx_m, 3) + " m" : "ไม่ทราบ"} · ความเร็ว ${fmt(l.velocity_m_per_ns, 3)} m/ns (${esc(l.velocity_source)})
     ${l.companions.length ? "· ไฟล์ประกอบ: " + l.companions.map((c) => `<span title="${esc(c.text || "")}">${esc(c.name)}</span>`).join(", ") : ""}`;
   const stamp = Date.now();
-  $("#panes").innerHTML = VIEWS.map(([v, title, note], i) => `
+  const views = VIEWS.filter(([v]) => (l.views || ["grey", "high_gain", "envelope"]).includes(v));
+  $("#viewToggles").innerHTML = views.map(([v, title]) => `<label class="toggle small" title="${esc(title)}">
+    <input type="checkbox" data-viewtoggle="${v}" ${S.hidden.has(v) ? "" : "checked"}> ${esc(title.split(" (")[0])}</label>`).join("");
+  $("#panes").innerHTML = views.filter(([v]) => !S.hidden.has(v)).map(([v, title, note]) => `
     <div class="pane" data-view="${v}">
       <div class="pane-cap"><b>${title}</b><span class="muted">${note}
         ${v === "envelope" ? `<span class="legend">-30 dB <span class="bar" style="background:linear-gradient(90deg,#30123b,#4686fb,#1ae4b6,#a2fc3c,#faba39,#e4460a,#7a0403)"></span> 0 dB</span>` : ""}</span></div>
       <div class="plot">
-        <div class="yaxis left">${yTicks(l, "t")}<span class="ttl">เวลา (ns)</span></div>
-        <div class="imgwrap" data-view="${v}"><img alt="${title}" src="/api/jobs/${S.job.job_id}/lines/${l.line_id}/${v}.png?${stamp}">${overlay(l)}</div>
-        <div class="yaxis right">${yTicks(l, "d")}<span class="ttl">ความลึก (m)</span></div>
+        <div class="yaxis left" data-axis="t"></div>
+        <div class="imgwrap" data-view="${v}"><div class="zoomer"><img alt="${title}" draggable="false" src="/api/jobs/${S.job.job_id}/lines/${l.line_id}/${v}.png?${stamp}">${overlay(l)}</div></div>
+        <div class="yaxis right" data-axis="d"></div>
       </div>
-      ${i === VIEWS.length - 1 ? `<div class="xaxis">${xTicks(l)}<span class="ttl">${l.dx_m ? "trace / ระยะ (m)" : "trace"}</span></div>` : ""}
-    </div>`).join("");
+      <div class="xaxis" data-axis="x"></div>
+    </div>`).join("") || `<p class="muted">เลือกภาพที่จะแสดงด้านบน</p>`;
+  applyZoom();
   renderRecipe(l);
   renderCards(l);
   renderCompare(l);
@@ -172,16 +185,71 @@ function nice(span, n) {
   const raw = span / n, p = 10 ** Math.floor(Math.log10(raw)), m = raw / p;
   return (m < 1.5 ? 1 : m < 3 ? 2 : m < 7 ? 5 : 10) * p;
 }
+// Ticks for the zoom window S.view (fractions of the whole line, 0..1 on both axes).
+function ticks(lo, hi, n, place) {
+  const s = nice(hi - lo || 1, n), out = [];
+  for (let v = Math.ceil(lo / s) * s; v <= hi + 1e-9; v += s) out.push(place(v));
+  return out.join("");
+}
 function yTicks(l, kind) {
-  const T = l.time_window_ns, v = l.velocity_m_per_ns, out = [];
-  if (kind === "t") { const s = nice(T, 5); for (let t = 0; t <= T; t += s) out.push([t / T, t]); }
-  else { const D = T * v / 2, s = nice(D, 5); for (let d = 0; d <= D; d += s) out.push([d / D, +d.toFixed(2)]); }
-  return out.map(([f, lab]) => `<span style="top:${f * 100}%">${lab}</span>`).join("");
+  const T = l.time_window_ns, { y0, y1 } = S.view, f = (t) => ((t / T - y0) / (y1 - y0)) * 100;
+  if (kind === "t") return ticks(y0 * T, y1 * T, 5, (t) => `<span style="top:${f(t)}%">${+t.toFixed(2)}</span>`) + `<span class="ttl">เวลา (ns)</span>`;
+  const k = l.velocity_m_per_ns / 2;  // depth = t v / 2
+  return ticks(y0 * T * k, y1 * T * k, 5, (d) => `<span style="top:${f(d / k)}%">${+d.toFixed(2)}</span>`) + `<span class="ttl">ความลึก (m)</span>`;
 }
 function xTicks(l) {
-  const N = l.n_traces, s = nice(N, 8), out = [];
-  for (let t = 0; t < N; t += s) out.push(`<span style="left:${(t / N) * 100}%">${t}${l.dx_m ? `<br>${(t * l.dx_m).toFixed(1)}` : ""}</span>`);
-  return out.join("");
+  const N = l.n_traces, { x0, x1 } = S.view, f = (t) => ((t / N - x0) / (x1 - x0)) * 100;
+  return ticks(x0 * N, x1 * N, 8, (t) => `<span style="left:${f(t)}%">${Math.round(t)}${l.dx_m ? `<br>${(t * l.dx_m).toFixed(1)}` : ""}</span>`)
+    + `<span class="ttl">${l.dx_m ? "trace / ระยะ (m)" : "trace"}</span>`;
+}
+
+// ------------------------------------------------------------------ zoom (all panes share one window)
+function applyZoom() {
+  const l = line(); if (!l) return;
+  const { x0, x1, y0, y1 } = S.view, w = x1 - x0, h = y1 - y0;
+  $$(".zoomer").forEach((z) => Object.assign(z.style, { left: `${(-x0 / w) * 100}%`, width: `${100 / w}%`, top: `${(-y0 / h) * 100}%`, height: `${100 / h}%` }));
+  $$('[data-axis="t"]').forEach((a) => (a.innerHTML = yTicks(l, "t")));
+  $$('[data-axis="d"]').forEach((a) => (a.innerHTML = yTicks(l, "d")));
+  $$('[data-axis="x"]').forEach((a) => (a.innerHTML = xTicks(l)));
+  const zoomed = w < 0.999 || h < 0.999;
+  $("#zoomInfo").textContent = zoomed ? `แสดง trace ${Math.round(x0 * l.n_traces)}–${Math.round(x1 * l.n_traces)}`
+    + (l.dx_m ? ` (${(x0 * l.n_traces * l.dx_m).toFixed(1)}–${(x1 * l.n_traces * l.dx_m).toFixed(1)} m)` : "")
+    + ` · ${(y0 * l.time_window_ns).toFixed(0)}–${(y1 * l.time_window_ns).toFixed(0)} ns` : "เต็มเส้น";
+  drawGuides();
+}
+function setView(x0, x1, y0, y1) {
+  const l = line(), minW = Math.min(1, 8 / Math.max(l.n_traces, 1)), minH = Math.min(1, 4 / Math.max(l.n_samples, 1));
+  const fit = (a, b, min) => {
+    let w = Math.min(Math.max(b - a, min), 1);
+    a = Math.min(Math.max(a, 0), 1 - w);
+    return [a, a + w];
+  };
+  [x0, x1] = fit(x0, x1, minW); [y0, y1] = fit(y0, y1, minH);
+  S.view = { x0, x1, y0, y1 };
+  applyZoom();
+}
+function zoomAt(fx, fy, factor, xOnly) {  // fx, fy: point that stays put (fractions of the whole line)
+  const v = S.view;
+  const nx = (a) => fx + (a - fx) * factor, ny = (a) => fy + (a - fy) * factor;
+  setView(nx(v.x0), nx(v.x1), xOnly ? v.y0 : ny(v.y0), xOnly ? v.y1 : ny(v.y1));
+}
+function resetZoom() { S.view = { x0: 0, x1: 1, y0: 0, y1: 1 }; applyZoom(); }
+function centreOn(trace) {  // keep the zoom, move the window so the trace is in the middle
+  const l = line(), v = S.view, w = v.x1 - v.x0, c = (trace + 0.5) / l.n_traces;
+  setView(c - w / 2, c + w / 2, v.y0, v.y1);
+}
+// Cursor trace (from the map) and the depth band shown on the map, drawn on every pane.
+function drawGuides() {
+  const l = line(); if (!l) return;
+  $$(".guide").forEach((g) => g.remove());
+  const band = M.data?.slice && M.band(), T = l.time_window_ns, k = l.velocity_m_per_ns / 2;
+  $$(".zoomer").forEach((z) => {
+    if (S.cursor != null) z.insertAdjacentHTML("beforeend", `<div class="guide vline" style="left:${((S.cursor + 0.5) / l.n_traces) * 100}%"></div>`);
+    if (band && !$("#mapCard").hidden) {
+      const t0 = band[0] / k / T, t1 = band[1] / k / T;
+      z.insertAdjacentHTML("beforeend", `<div class="guide hband" style="top:${t0 * 100}%;height:${Math.max((t1 - t0) * 100, 0.3)}%"></div>`);
+    }
+  });
 }
 function overlay(l) {
   const T = l.time_window_ns, N = l.n_traces;
@@ -214,7 +282,7 @@ function overlay(l) {
 }
 function refreshOverlays() {
   const l = line();
-  $$(".imgwrap").forEach((w) => { $$(".zbox,.art", w).forEach((e) => e.remove()); w.insertAdjacentHTML("beforeend", overlay(l)); });
+  $$(".zoomer").forEach((w) => { $$(".zbox,.art,.rbox", w).forEach((e) => e.remove()); w.insertAdjacentHTML("beforeend", overlay(l)); });
 }
 
 function renderCards(l) {
@@ -288,13 +356,170 @@ function renderRecipe(l) {
   $("#csvLink").href = `/api/jobs/${S.job.job_id}/lines/${l.line_id}/export/csv`;
 }
 
+// ------------------------------------------------------------------ map (top view, after IDS AiMaps)
+// Basemaps load from the internet; without it the tracks still show on a blank background with a scale.
+const BASEMAPS = {
+  satellite: ["ภาพดาวเทียม", "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    "ภาพดาวเทียม &copy; Esri, Maxar, Earthstar Geographics และ GIS User Community"],
+  street: ["แผนที่ถนน", "https://tile.openstreetmap.org/{z}/{x}/{y}.png", "&copy; ผู้ร่วมพัฒนา <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"],
+};
+function cmap(name, f) {  // f in 0..1 -> css colour
+  f = Math.min(Math.max(f, 0), 1);
+  if (name === "grey") { const g = Math.round(30 + 225 * f); return `rgb(${g},${g},${g})`; }
+  if (name === "hot") return `rgb(${Math.round(255 * Math.min(f * 2.5, 1))},${Math.round(255 * Math.min(Math.max(f * 2.5 - 1, 0), 1))},${Math.round(255 * Math.max(f * 2.5 - 2, 0) * 2)})`;
+  const c = (x) => Math.round(255 * Math.min(Math.max(1.5 - Math.abs(4 * f - x), 0), 1));  // jet
+  return `rgb(${c(3)},${c(2)},${c(1)})`;
+}
+const M = {
+  map: null, data: null, overview: [], layers: {}, offline: false,
+  init() {
+    if (this.map || typeof L === "undefined") return !!this.map;
+    this.map = L.map("map", { preferCanvas: true, zoomSnap: 0.25, maxZoom: 22 });
+    const base = {};
+    for (const [k, [name, url, attr]] of Object.entries(BASEMAPS)) {
+      base[name] = L.tileLayer(url, { attribution: attr, maxNativeZoom: 19, maxZoom: 22 });
+      base[name].on("tileerror", () => this.setOffline(true));
+      base[name].on("tileload", () => this.setOffline(false));
+    }
+    base["ไม่มีแผนที่ฐาน (ออฟไลน์)"] = L.layerGroup();
+    const pick = store("basemap", "ภาพดาวเทียม");
+    (base[pick] || base["ภาพดาวเทียม"]).addTo(this.map);
+    L.control.layers(base, null, { position: "topright" }).addTo(this.map);
+    L.control.scale({ metric: true, imperial: false }).addTo(this.map);
+    this.map.on("baselayerchange", (e) => { keep("basemap", e.name); this.setOffline(false); });
+    for (const k of ["all", "slice", "zones", "marks", "hover"]) this.layers[k] = L.layerGroup().addTo(this.map);
+    this.map.setView([13.7563, 100.5018], 5);
+    $("#sliceDepth").value = store("sliceDepth", 6); $("#sliceThr").value = store("sliceThr", -40);
+    $("#sliceCmap").value = store("sliceCmap", "jet");
+    return true;
+  },
+  setOffline(on) {
+    if (on === this.offline) return;
+    this.offline = on;
+    $("#mapNote").textContent = on ? "(โหลดแผนที่ฐานไม่ได้: ไม่มีอินเทอร์เน็ต แสดงเฉพาะแนวสแกน)" : "";
+  },
+  async load() {  // job overview + the selected line's track and depth slices
+    if (!S.job || !this.init()) return;
+    const l = line();
+    try {
+      this.overview = await api(jobUrl("/map.json"));
+      this.data = l ? await api(lineUrl("/map.json")) : null;
+    } catch (e) { this.data = null; }
+    const sl = this.data?.slice;
+    if (sl) $("#sliceDepth").max = sl.db.length - 1;
+    const anyGps = this.overview.some((o) => o.has_gps);
+    $("#mapCard").hidden = !anyGps;
+    if (!anyGps) return;
+    this.draw(true);
+    setTimeout(() => this.map.invalidateSize(), 50);
+  },
+  band() {
+    const sl = this.data?.slice; if (!sl) return null;
+    const i = Math.min(+$("#sliceDepth").value, sl.db.length - 1);
+    return [sl.depth_edges_m[i], sl.depth_edges_m[i + 1]];
+  },
+  pickDepth(depth) {  // from a click on the radargram
+    const sl = this.data?.slice; if (!sl) return;
+    let i = sl.depth_edges_m.findIndex((d, k) => k > 0 && depth < d) - 1;
+    if (i < 0) i = sl.db.length - 1;
+    $("#sliceDepth").value = i; keep("sliceDepth", i);
+    this.drawSlice();
+  },
+  latlon(trace) {
+    const d = this.data, g = d.slice.trace_groups, k = g[0][1] - g[0][0] + 1;
+    return d.points[Math.min(Math.max(Math.floor(trace / k), 0), d.points.length - 1)];
+  },
+  draw(fit) {
+    const ly = this.layers;
+    ly.all.clearLayers(); ly.marks.clearLayers(); ly.hover.clearLayers();
+    if ($("#mapAll").checked || !this.data?.has_gps) for (const o of this.overview) {
+      if (!o.has_gps || o.line_id === S.line) continue;
+      L.polyline(o.points, { color: "#fff", weight: 4, opacity: 0.9 }).addTo(ly.all);
+      L.polyline(o.points, { color: "#1f6feb", weight: 2 }).addTo(ly.all)
+        .bindTooltip(`${esc(o.line_id)} · ${esc(o.source_file)} (คลิกเพื่อเปิด)`, { sticky: true })
+        .on("click", () => switchLine(o.line_id));
+    }
+    const d = this.data;
+    $("#mapMsg").hidden = !!d?.has_gps;
+    if (!d?.has_gps) {
+      $("#mapMsg").textContent = `เส้น ${S.line} ไม่มีไฟล์ GPS (.cor) จึงวางบนแผนที่ไม่ได้` + (this.overview.some((o) => o.has_gps) ? " (แสดงเส้นอื่นที่มี GPS)" : "");
+      ly.slice.clearLayers(); ly.zones.clearLayers();
+      const pts = this.overview.filter((o) => o.has_gps).flatMap((o) => o.points);
+      if (fit && pts.length) this.map.fitBounds(pts, { padding: [20, 20] });
+      return;
+    }
+    const [s, e] = d.ends;
+    L.circleMarker(s, { radius: 5, color: "#fff", fillColor: "#2f9e44", fillOpacity: 1, weight: 2 }).addTo(ly.marks).bindTooltip(`${S.line} เริ่ม (trace 0)`);
+    L.circleMarker(e, { radius: 5, color: "#fff", fillColor: "#c92a2a", fillOpacity: 1, weight: 2 }).addTo(ly.marks).bindTooltip(`${S.line} จบ (trace ${d.n_traces - 1})`);
+    for (const m of d.markers) L.circleMarker([m.lat, m.lon], { radius: 4, color: "#000", fillColor: "#ffd43b", fillOpacity: 1, weight: 1 })
+      .addTo(ly.marks).bindTooltip(`มาร์กเกอร์ trace ${m.trace}${m.type ? " · " + esc(m.type) : ""}`);
+    $("#mapNote").textContent = this.offline ? $("#mapNote").textContent
+      : `(GPS ${d.gps_fixes} จุด · ยาวตาม GPS ${fmt(d.length_gps_m, 1)} m${d.length_wheel_m ? ` · ตามล้อวัดระยะ ${fmt(d.length_wheel_m, 1)} m` : ""})`;
+    this.drawSlice(); this.drawZones();
+    if (fit) this.fit();
+  },
+  fit() { if (this.data?.has_gps) this.map.fitBounds(this.data.points, { padding: [30, 30], maxZoom: 21 }); },
+  drawSlice() {
+    const d = this.data, ly = this.layers.slice; ly.clearLayers();
+    if (!d?.has_gps) return;
+    const sl = d.slice, i = Math.min(+$("#sliceDepth").value, sl.db.length - 1), thr = +$("#sliceThr").value, name = $("#sliceCmap").value;
+    const row = sl.db[i], [d0, d1] = this.band();
+    $("#sliceDepthLbl").textContent = `${d0.toFixed(2)}–${d1.toFixed(2)} m`;
+    $("#sliceThrLbl").textContent = thr <= sl.floor_db ? "ไม่ซ่อน" : `${thr} dB`;
+    $("#sliceLegend").innerHTML = `<span class="legend">${sl.floor_db} dB <span class="bar" style="background:linear-gradient(90deg,${[0, .25, .5, .75, 1].map((f) => cmap(name, f)).join(",")})"></span> 0 dB</span>`;
+    for (let k = 0; k < d.points.length - 1; k++) {
+      const v = row[k], hide = v < thr;
+      L.polyline([d.points[k], d.points[k + 1]], { color: hide ? "#0b1a5c" : cmap(name, (v - sl.floor_db) / -sl.floor_db), weight: 14, opacity: hide ? 0.55 : 0.95, lineCap: "butt" })
+        .addTo(ly).on("click", () => this.goTo(sl.trace_groups[k][0]))
+        .bindTooltip(`trace ${sl.trace_groups[k][0]}–${sl.trace_groups[k][1]} · ${v} dB ที่ลึก ${d0.toFixed(2)}–${d1.toFixed(2)} m`, { sticky: true });
+    }
+    drawGuides();
+    keep("sliceDepth", i); keep("sliceThr", thr); keep("sliceCmap", name);
+  },
+  drawZones() {
+    const ly = this.layers.zones; ly.clearLayers();
+    const l = line(), d = this.data;
+    if (!d?.has_gps || !$("#mapZones").checked || !l) return;
+    for (const z of l.zones) {
+      if (z.review === "rejected" && !$("#showRejected").checked) continue;
+      if (z.suspected_type === "artifact" && !$("#showArtifacts").checked) continue;
+      const col = getComputedStyle(document.documentElement).getPropertyValue((TYPE[z.suspected_type] || TYPE.unknown)[1]).trim();
+      const path = [z.trace_start, Math.round((z.trace_start + z.trace_end) / 2), z.trace_end].map((t) => this.latlon(t));
+      const sel = z.zone_id === S.sel;
+      // thin line on top of the slice so the colours underneath stay visible
+      L.polyline(path, { color: "#fff", weight: sel ? 7 : 5, opacity: 0.9, lineCap: "round" }).addTo(ly);
+      L.polyline(path, { color: col, weight: sel ? 5 : 3, opacity: z.review === "rejected" ? 0.4 : 1, lineCap: "round", dashArray: z.review === "auto" ? "6 4" : null })
+        .addTo(ly).on("click", () => { select(z.zone_id); centreOn(Math.round((z.trace_start + z.trace_end) / 2)); })
+        .bindTooltip(`<b>${esc(z.zone_id)}</b> ${esc((TYPE[z.suspected_type] || TYPE.unknown)[0])} · เชื่อมั่น${CONF[z.confidence]}<br>ลึก ${fmt(z.depth_top_m)}–${fmt(z.depth_bottom_m)} m · ${REV[z.review]}`, { sticky: true });
+      L.marker(this.latlon(Math.round((z.trace_start + z.trace_end) / 2)), { interactive: false,
+        icon: L.divIcon({ className: "zlabel", html: esc(z.zone_id), iconSize: null }) }).addTo(ly);
+    }
+  },
+  hover(trace, pin) {
+    const ly = this.layers.hover;
+    if (!this.data?.has_gps || !ly) return;
+    ly.clearLayers();
+    const p = this.latlon(trace);
+    L.circleMarker(p, { radius: 7, color: "#fff", weight: 3, fillColor: "#e8590c", fillOpacity: 1 }).addTo(ly);
+    if (pin && !this.map.getBounds().contains(p)) this.map.panTo(p);
+  },
+  goTo(trace) {  // click on the map -> show that trace on the radargrams
+    S.cursor = trace; centreOn(trace); this.hover(trace);
+    $("#panes").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  },
+};
+async function switchLine(id) {
+  S.line = id; S.sel = null; S.editing = null; S.cursor = null; S.view = { x0: 0, x1: 1, y0: 0, y1: 1 };
+  render(); M.load();
+}
+
 // ------------------------------------------------------------------ comparison with reference software
 const jobUrl = (p) => `/api/jobs/${S.job.job_id}${p}`;
 const lineUrl = (p) => jobUrl(`/lines/${S.line}${p}`);
 function pct(v) { return v == null ? "–" : Math.round(v * 100) + "%"; }
 function renderCompare(l) {
   const ch = S.job.choices, c = S.job.comparison.lines[l.line_id];
-  const src = $("#refSource"), cur = src.value || "subscan";
+  const src = $("#refSource"), cur = src.value || "viewpoint";
   src.innerHTML = opts(Object.keys(ch.ref_source), cur, ch.ref_source);
   const s = c.summary;
   $("#cmpNote").textContent = c.picks.length ? `(${c.picks.length} จุดอ้างอิง)` : "(ยังไม่มีข้อมูลอ้างอิง)";
@@ -364,12 +589,13 @@ function buildInfoForm() {
 // ------------------------------------------------------------------ actions
 function select(id, scroll = true) {
   S.sel = id;
+  M.drawZones();
   $$(".zbox").forEach((b) => b.classList.toggle("sel", b.dataset.zone === id));
   $$(".zcard").forEach((c) => c.classList.toggle("sel", c.dataset.card === id));
   if (scroll) $(`[data-card="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 async function update(promise, msg) {
-  try { S.job = await promise; render(); if (S.sel) select(S.sel, false); if (msg) toast(msg); }
+  try { S.job = await promise; render(); M.drawZones(); if (S.sel) select(S.sel, false); if (msg) toast(msg); }
   catch (e) { toast("ผิดพลาด: " + e.message); }
 }
 function review(zid, action, changes, note) {
@@ -380,12 +606,13 @@ function review(zid, action, changes, note) {
 }
 function startDraw(forZone) {
   S.drawFor = forZone; document.body.classList.add("drawing");
+  if (forZone === ZOOM_DRAW) { toast("ลากกรอบบนภาพบริเวณที่ต้องการซูม (Esc เพื่อยกเลิก)"); return; }
   toast(forZone === REF_DRAW ? "ลากกรอบบนภาพตรงตำแหน่งที่ซอฟต์แวร์อ้างอิงมาร์กไว้ (Esc เพื่อยกเลิก)" : forZone ? `ลากกรอบใหม่ของโซน ${forZone} บนภาพใดก็ได้` : "ลากกรอบบนภาพเพื่อเพิ่มโซน (Esc เพื่อยกเลิก)");
 }
 function stopDraw() { S.drawFor = null; document.body.classList.remove("drawing"); $$(".drawbox").forEach((d) => d.remove()); }
 
 function pos(e, wrap) {
-  const r = wrap.getBoundingClientRect(), l = line();
+  const r = ($(".zoomer", wrap) || wrap).getBoundingClientRect(), l = line();  // the zoomer spans the whole line
   const fx = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1), fy = Math.min(Math.max((e.clientY - r.top) / r.height, 0), 1);
   return { fx, fy, trace: Math.min(Math.floor(fx * l.n_traces), l.n_traces - 1), t: fy * l.time_window_ns };
 }
@@ -394,7 +621,15 @@ document.addEventListener("mousemove", (e) => {
   const w = e.target.closest?.(".imgwrap");
   if (w && line()) {
     const p = pos(e, w), l = line();
-    $("#readout").textContent = `trace ${p.trace}${l.dx_m ? ` · ระยะ ${(p.trace * l.dx_m).toFixed(2)} m` : ""} · เวลา ${p.t.toFixed(1)} ns · ลึก ${(p.t * l.velocity_m_per_ns / 2).toFixed(2)} m (v ${l.velocity_m_per_ns.toFixed(3)})`;
+    $("#readout").textContent = `trace ${p.trace}${l.dx_m ? ` · ระยะ ${(p.trace * l.dx_m).toFixed(2)} m` : ""} · เวลา ${p.t.toFixed(1)} ns · ลึก ${(p.t * l.velocity_m_per_ns / 2).toFixed(2)} m (v ${l.velocity_m_per_ns.toFixed(3)})`
+      + (M.data?.has_gps ? " · ดูจุดนี้บนแผนที่ได้" : "");
+    M.hover(p.trace);
+  }
+  if (S.pan) {
+    const r = S.pan.wrap.getBoundingClientRect(), v = S.pan.view;
+    const dx = (e.clientX - S.pan.x) / r.width * (v.x1 - v.x0), dy = (e.clientY - S.pan.y) / r.height * (v.y1 - v.y0);
+    if (Math.abs(e.clientX - S.pan.x) + Math.abs(e.clientY - S.pan.y) > 3) S.pan.moved = true;
+    if (S.pan.moved) setView(v.x0 - dx, v.x1 - dx, v.y0 - dy, v.y1 - dy);
   }
   if (S.drag) {
     const p = pos(e, S.drag.wrap), a = S.drag.start;
@@ -405,15 +640,28 @@ document.addEventListener("mousemove", (e) => {
 });
 document.addEventListener("mousedown", (e) => {
   const w = e.target.closest?.(".imgwrap");
-  if (!w || S.drawFor === null || e.button !== 0) return;
+  if (!w || e.button !== 0) return;
   e.preventDefault();
-  const box = document.createElement("div"); box.className = "drawbox"; w.appendChild(box);
+  if (S.drawFor === null) {  // pan; a click without moving picks the trace and the map depth
+    S.pan = { wrap: w, x: e.clientX, y: e.clientY, view: { ...S.view }, start: pos(e, w), moved: false };
+    return;
+  }
+  const box = document.createElement("div"); box.className = "drawbox"; $(".zoomer", w).appendChild(box);
   S.drag = { wrap: w, start: pos(e, w), box };
 });
 document.addEventListener("mouseup", async () => {
+  if (S.pan) {
+    const { moved, start } = S.pan; S.pan = null;
+    if (!moved) { S.cursor = start.trace; M.pickDepth(start.t * line().velocity_m_per_ns / 2); M.hover(start.trace, true); drawGuides(); }
+    return;
+  }
   if (!S.drag) return;
   const { start: a, end: b } = S.drag; const target = S.drawFor;
   S.drag = null; stopDraw();
+  if (target === ZOOM_DRAW) {
+    if (b && Math.abs(b.fx - a.fx) > 0.002) setView(Math.min(a.fx, b.fx), Math.max(a.fx, b.fx), Math.min(a.fy, b.fy), Math.max(a.fy, b.fy));
+    return;
+  }
   if (!b || Math.abs(b.trace - a.trace) < 2) { toast("กรอบเล็กเกินไป"); return; }
   const vals = { trace_start: Math.min(a.trace, b.trace), trace_end: Math.max(a.trace, b.trace),
     time_top_ns: +Math.min(a.t, b.t).toFixed(2), time_bottom_ns: +Math.max(a.t, b.t).toFixed(2) };
@@ -433,8 +681,15 @@ S.drawFor = null;
 
 document.addEventListener("click", (e) => {
   const t = e.target;
+  const zb2 = t.closest("[data-zoom]");
+  if (zb2) {
+    const v = S.view, cx = (v.x0 + v.x1) / 2, cy = (v.y0 + v.y1) / 2, a = zb2.dataset.zoom;
+    if (a === "in") zoomAt(cx, cy, 1 / 1.5); else if (a === "out") zoomAt(cx, cy, 1.5);
+    else if (a === "box") startDraw(ZOOM_DRAW); else resetZoom();
+    return;
+  }
   const rm = t.closest("[data-rm]"); if (rm) { S.files.splice(+rm.dataset.rm, 1); renderFiles(); return; }
-  const li = t.closest("[data-line]"); if (li) { S.line = li.dataset.line; S.sel = null; S.editing = null; render(); return; }
+  const li = t.closest("[data-line]"); if (li) { switchLine(li.dataset.line); return; }
   const zb = t.closest(".zbox"); if (zb && S.drawFor === null) { select(zb.dataset.zone); return; }
   const btn = t.closest("[data-act]");
   if (btn) {
@@ -457,6 +712,11 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("change", (e) => {
   const t = e.target;
+  if (t.dataset.viewtoggle) {
+    t.checked ? S.hidden.delete(t.dataset.viewtoggle) : S.hidden.add(t.dataset.viewtoggle);
+    keep("hiddenViews", [...S.hidden]); renderLine(); if (S.sel) select(S.sel, false);
+    return;
+  }
   if (t.dataset.verdict) update(post(lineUrl("/ref/verdict"), { key: t.dataset.verdict, verdict: t.value || null }), "บันทึกคำตัดสินแล้ว");
   else if (t.dataset.vnote) update(post(lineUrl("/ref/verdict"), { key: t.dataset.vnote, note: t.value }), "บันทึกหมายเหตุแล้ว");
   else if (t.dataset.pair) update(api(lineUrl(`/ref/picks/${t.dataset.pair}`), { method: "PUT", headers: { "Content-Type": "application/json" },
@@ -493,6 +753,15 @@ document.addEventListener("keydown", (e) => {
   else if (S.sel && k === "e") { S.editing = S.sel; renderCards(l); select(S.sel); }
 });
 
+document.addEventListener("wheel", (e) => {
+  const w = e.target.closest?.(".imgwrap");
+  if (!w || !line()) return;
+  e.preventDefault();
+  const p = pos(e, w);
+  zoomAt(p.fx, p.fy, e.deltaY < 0 ? 1 / 1.25 : 1.25, e.shiftKey);
+}, { passive: false });
+document.addEventListener("dblclick", (e) => { if (e.target.closest?.(".imgwrap") && S.drawFor === null) resetZoom(); });
+
 // ------------------------------------------------------------------ wiring
 const drop = $("#drop");
 drop.addEventListener("click", () => $("#fileInput").click());
@@ -505,8 +774,13 @@ $("#runBtn").addEventListener("click", runUpload);
 $("#demoBtn").addEventListener("click", runDemo);
 $("#newJob").addEventListener("click", () => { if (confirm("เริ่มงานใหม่? งานนี้ยังเปิดได้จากโฟลเดอร์งานบนเครื่อง")) { location.hash = ""; location.reload(); } });
 $("#drawBtn").addEventListener("click", () => startDraw(""));
-$("#showArtifacts").addEventListener("change", refreshOverlays);
-$("#showRejected").addEventListener("change", refreshOverlays);
+$("#showArtifacts").addEventListener("change", () => { refreshOverlays(); M.drawZones(); });
+$("#showRejected").addEventListener("change", () => { refreshOverlays(); M.drawZones(); });
+for (const id of ["#sliceDepth", "#sliceThr", "#sliceCmap"]) $(id).addEventListener("input", () => M.drawSlice());
+$("#mapZones").addEventListener("change", () => M.drawZones());
+$("#mapAll").addEventListener("change", () => M.draw(false));
+$("#mapFit").addEventListener("click", (e) => { e.preventDefault(); M.fit(); });
+$("#mapCard").addEventListener("toggle", () => { if ($("#mapCard").open) setTimeout(() => M.map?.invalidateSize(), 50); drawGuides(); });
 $("#showRef").addEventListener("change", refreshOverlays);
 $("#refSource").addEventListener("change", () => renderCompare(line()));
 $("#refDrawBtn").addEventListener("click", () => startDraw(REF_DRAW));
@@ -526,7 +800,7 @@ $("#refCsvInput").addEventListener("change", async (e) => {
     toast(`นำเข้า ${r.added} จุด` + (r.warnings.length ? ` (ข้าม ${r.warnings.length} แถว)` : ""));
   } catch (err) { toast("นำเข้าไม่ได้: " + err.message); }
 });
-$("#featAdd").addEventListener("click", () => { S.job.comparison.features = [...featureValues(), { feature: "", source: $("#refSource").value || "subscan", rating: "untested", note: "" }]; renderFeatures(); });
+$("#featAdd").addEventListener("click", () => { S.job.comparison.features = [...featureValues(), { feature: "", source: $("#refSource").value || "viewpoint", rating: "untested", note: "" }]; renderFeatures(); });
 $("#featSave").addEventListener("click", () => update(post(jobUrl("/compare/settings"), { features: featureValues() }), "บันทึกคะแนนฟีเจอร์แล้ว"));
 $("#zoneFilter").addEventListener("change", () => renderCards(line()));
 $("#infoForm2").addEventListener("submit", (e) => { e.preventDefault(); update(post(`/api/jobs/${S.job.job_id}/info`, infoValues(e.target)), "บันทึกข้อมูลงานแล้ว"); });
@@ -549,6 +823,7 @@ async function reprocess(options) {
   S.sel = null; S.editing = null;
   await update(post(`/api/jobs/${S.job.job_id}/lines/${S.line}/reprocess`, { options }), "ประมวลผลใหม่แล้ว");
   busy(false);
+  M.load();
 }
 $("#reprocessBtn").addEventListener("click", () => reprocess(optValues()));
 $("#autoBtn").addEventListener("click", () => reprocess({}));

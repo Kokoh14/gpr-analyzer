@@ -1,4 +1,4 @@
-"""End-to-end on a line shaped like the SubScan sample (555 traces, ~145 ns, v ≈ 0.135 m/ns)."""
+"""End-to-end on a line shaped like an early sample line (555 traces, ~145 ns, v ≈ 0.135 m/ns)."""
 
 from detect_synth import Line
 
@@ -6,7 +6,7 @@ from gpr_analyzer.detect import analyze_line
 from gpr_analyzer.detect.models import Confidence, ZoneType
 
 
-def subscan_like():
+def field_like():
     line = Line(n_samples=580, n_traces=555, dt_ns=0.25, dx_m=0.05, v=0.135, f_ghz=0.25, seed=7)
     line.direct_wave(amp=10.0).layer(35, amp=0.6)  # the ~35 ns band
     line.void(150, 300, 78, 108, amp=2.0, polarity=-1, multiples=3)
@@ -16,8 +16,8 @@ def subscan_like():
     return line.radargram()
 
 
-def test_subscan_like_line():
-    res = analyze_line(subscan_like())
+def test_field_like_line():
+    res = analyze_line(field_like())
     stripes = [(a.trace_start, a.trace_end) for a in res.artifacts if a.kind == "vertical_stripe"]
     for a, b in ((200, 202), (240, 242), (260, 262), (310, 312), (365, 386)):
         assert any(s <= b and a <= e for s, e in stripes), (a, b, stripes)
