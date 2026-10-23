@@ -21,7 +21,7 @@ SCHEMA_VERSION = "0.1"
 CONFIDENCE_LEVELS = ("confirmed", "high", "medium", "low")
 ACTION_LEVELS = ("E", "1", "2", "3", "none")
 ZONE_TYPES = ("void_like", "pipe_point", "layer", "scattered", "artifact", "unknown")
-EVIDENCE_KINDS = ("present", "absent", "warning")  # ✓ / ✗ / ⚠
+EVIDENCE_KINDS = ("present", "absent", "warning", "not_assessed")  # ✓ / ✗ / ⚠ / –
 REVIEW_STATES = ("auto", "accepted", "edited", "rejected")
 SURFACE_USES = ("road", "building", "open", "unknown")
 
@@ -36,9 +36,11 @@ def _check(value: str, allowed: tuple[str, ...], name: str) -> str:
 class Evidence:
     """One reason behind a zone grade.
 
-    kind: present (✓ feature found), absent (✗ expected feature not found), warning (⚠ nearby artifact).
+    kind: present (✓ feature found), absent (✗ expected feature not found), warning (⚠ nearby artifact),
+          not_assessed (– could not be checked, e.g. roof polarity after background removal).
     code: stable identifier, translated by report.i18n (e.g. "strong_reflection").
-    text: free text used when the code has no translation.
+    text: Thai sentence from the producer; params["text_en"] holds the English one. When given,
+          these win over the i18n translation of the code, since they carry the measured values.
     params: values substituted into the translated sentence, e.g. {"traces": "365–385"}.
     """
 
@@ -48,6 +50,9 @@ class Evidence:
     params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # older detect output sends not-assessed signs as warning + params.not_assessed
+        if self.kind == "warning" and self.params.get("not_assessed"):
+            self.kind = "not_assessed"
         _check(self.kind, EVIDENCE_KINDS, "Evidence.kind")
 
 
