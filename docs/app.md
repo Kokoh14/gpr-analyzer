@@ -77,7 +77,14 @@ position (interpolated between fixes) and the map shows:
 - the open line coloured by a top-view energy slice: for the chosen depth band, the strongest Hilbert envelope
   per trace in dB below the line's maximum, with a hide-below threshold and Jet / Hot / grey colours. This is
   relative energy for finding things on the map, not a probability; confidence stays high/medium/low;
+- or, with "แสดง: ค่า dielectric (εr)", the dielectric points of all lines: every accepted hyperbola fit at its
+  apex position, coloured by εr = (c / v)² on a log scale 1–81. A fit's velocity is the average from the ground
+  surface to its apex. Fits deeper than the depth slider are hidden, fits in the chosen band are large, shallower
+  ones faded. Nothing is interpolated between fits. Each track is coloured by the velocity the line was processed
+  with (grey dashed when it was a default or header value, not measured). Fits in excluded sections are left out;
 - zones along the track (dashed until reviewed), clickable to select them.
+
+The depth slider stands vertically to the right of the map, ground level (0 m) at the top.
 
 Clicking the map moves the radargrams to that trace; clicking a radargram picks the slice depth and shows the
 point on the map. Zones in the report and CSV get WGS84 start/end coordinates from the same track.
