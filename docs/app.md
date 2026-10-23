@@ -50,6 +50,20 @@ comparison data). The start page lists earlier jobs; opening one re-reads its up
 saved options and puts the zones and reviews back. Reprocessing a line clears its reviews (they stay in the
 labels file).
 
+## Before the report
+
+- **Sections not used**: drag on a radargram (✂) to mark a distance range whose results are not used (bad data,
+  parked car, outside the survey area) with a reason. Zones whose centre falls inside are left out of the report,
+  and the range is hatched in the figures as "section excluded by the reviewer". Undo by removing the section.
+- **Line status**: pending / approved (use in the report) / needs reprocessing, with a note.
+- **Reprocessing keeps the review**: zones drawn by the reviewer stay, and an accept / reject / edit on an old
+  automatic zone moves to the new zone covering the same place (box overlap ≥ 0.5). Unmatched decisions are
+  listed in the `reprocess` label record.
+- **Summary before the report** (`/api/jobs/<id>/summary`): what is still open (unreviewed zones, lines not
+  approved, default velocity, no GPS, missing job info, unfinished processing), job info, the zones that need
+  action (levels E / 1 / 2) with distance, depth and coordinates, and a table per line; report buttons on the
+  same page. All of these decisions go to `labels.jsonl`.
+
 ## Map (top view)
 
 `gpr_analyzer/app/geo.py`, laid out after IDS AiMaps. When a line has a `.cor` GPS file, every trace gets a
