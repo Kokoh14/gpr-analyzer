@@ -1,0 +1,37 @@
+.survey3d-card { margin: 10px 0 16px; overflow: hidden; }
+.survey3d-card > summary { cursor: pointer; padding: 2px 0 7px; color: var(--accent); }
+.s3-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 9px; padding: 8px 0; }
+.s3-toolbar label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
+.s3-toolbar label.toggle { flex-direction: row; align-items: center; font-size: 12px; }
+.s3-toolbar input[type=range] { width: 95px; padding: 0; accent-color: #22c9b5; }
+.s3-toolbar .s3-depth { flex-direction: row; align-items: center; margin-right: auto; }
+.s3-depth output { font: 12px ui-monospace, monospace; white-space: nowrap; }
+.s3-layout { display: grid; grid-template-columns: minmax(0, 1fr) 170px; border: 1px solid #273c51; border-radius: 8px; overflow: hidden; }
+.s3-stage { position: relative; height: 490px; min-width: 0; background: #091523; overflow: hidden; }
+.s3-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.s3-badge { position: absolute; top: 17px; left: 18px; z-index: 1; color: #e5f2fd; font: 700 13px system-ui,sans-serif; letter-spacing: 2px; pointer-events: none; }
+.s3-badge span { display: block; color: #63bcb7; font-size: 9px; letter-spacing: 1.5px; margin-top: 5px; }
+.s3-status { position: absolute; top: 18px; right: 16px; left: 225px; text-align: right; color: #8ba7bb; font-size: 11px; pointer-events: none; z-index: 1; }
+.s3-readout { position: absolute; bottom: 0; left: 0; right: 0; background: #07131ddd; padding: 10px 14px; min-height: 37px; color: #b8d4e7; font: 11px ui-monospace,monospace; z-index: 1; pointer-events: none; }
+.s3-legend { position: absolute; right: 14px; bottom: 53px; color: #b8d4e7; font: 10px system-ui,sans-serif; text-align: right; pointer-events: none; }
+.s3-legend i { display: block; width: 110px; height: 7px; margin: 5px 0; border-radius: 3px; background: linear-gradient(90deg,#000,#fff); }
+.s3-legend.energy i { background: linear-gradient(90deg,#30123b,#4686fb,#1ae4b6,#a2fc3c,#faba39,#e4460a,#7a0403); }
+.s3-side { background: #102132; color: #c4d9e8; padding: 12px 10px; max-height: 490px; overflow-y: auto; }
+.s3-side h4 { font-size: 12px; } .s3-side h4 span { color: #63bcb7; }
+.s3-side .btn { color: #b9d4e7; background: transparent; border-color: #2b4258; font-size: 10px; padding: 3px 5px; }
+.s3-all { display: flex; gap: 5px; margin: 9px 0; }
+.s3-line { display: grid; grid-template-columns: 15px 1fr; gap: 5px; border-left: 2px solid transparent; padding: 7px 3px; border-bottom: 1px solid #20364b; cursor: pointer; }
+.s3-line.active { border-left-color: #36e0c7; background: #183347; }
+.s3-line input { width: auto; accent-color: #32ceb7; }
+.s3-line b { font: 700 12px system-ui,sans-serif; } .s3-line span { display: block; overflow-wrap: anywhere; font-size: 10px; color: #86a6bc; margin-top: 3px; }
+#s3Excluded { margin-top: 12px; font-size: 10px; color: #e2b674; }
+.s3-labels { position: absolute; inset: 0; pointer-events: none; }
+.s3-label { position: absolute; color: #a9c5d8; font: 10px ui-monospace,monospace; white-space: nowrap; transform: translate(-50%,-50%); text-shadow: 0 1px 3px #000; }
+.s3-label.line { background: #122a3dde; padding: 3px 6px; border: 1px solid #315c73; border-radius: 3px; color: #75e0ce; }
+.s3-tablewrap { overflow-x: auto; } .s3-tablewrap input[type=number] { min-width: 70px; width: 90px; }
+.s3-tablewrap input[type=checkbox] { width: auto; }
+.s3-placement { border-top: 1px solid var(--line); padding-top: 8px; } .s3-placement summary { cursor: pointer; font-size: 12px; }
+.s3-note { margin-top: 0; } #s3Datum { font: 11px ui-monospace,monospace; }
+.survey3d-card:fullscreen { background: var(--bg); padding: 18px; overflow-y: auto; }
+.survey3d-card:fullscreen .s3-stage, .survey3d-card:fullscreen .s3-side { height: calc(100vh - 285px); max-height: none; min-height: 360px; }
+@media(max-width: 760px) { .s3-layout { grid-template-columns: 1fr; } .s3-side { max-height: 160px; } .s3-stage { height: 390px; } .s3-status { top: 62px; left: 15px; text-align: left; } }

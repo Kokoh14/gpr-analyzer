@@ -239,6 +239,7 @@ async function pollProgress() {
     renderBanner(p);
     if (p.n_lines !== S.job.lines.length && !S.editing && !S.drag && !S.pan) {
       S.job = await api(jobUrl("")); renderTop(); renderLines(); M.load();
+      window.dispatchEvent(new CustomEvent("gpr:job", { detail: { job: S.job, line: S.line } }));
     }
   }
   if (p.state === "processing" || p.state === "waiting") S.pollH = setTimeout(pollProgress, 1000);
@@ -302,7 +303,9 @@ const zoneOf = (id) => line()?.zones.find((z) => z.zone_id === id);
 
 function render() {
   renderTop(); renderLines(); renderLine();
+  window.dispatchEvent(new CustomEvent("gpr:job", { detail: { job: S.job, line: S.line } }));
 }
+window.getGprSceneContext = () => ({ job: S.job, line: S.line });
 function renderTop() {
   const j = S.job, r = j.review, n = r.auto + r.accepted + r.edited + r.rejected;
   $("#jobMeta").innerHTML = `<b>${esc(j.info.project || "งานสำรวจ")}</b> <span class="muted">${esc(j.info.site || "")}</span>
@@ -707,6 +710,17 @@ async function switchLine(id) {
   render(); M.load();
 }
 
+window.addEventListener("gpr:3d-pick", async (event) => {
+  if (!S.job?.lines.some((ln) => ln.line_id === event.detail.line)) return;
+  await switchLine(event.detail.line);
+  S.cursor = event.detail.trace; centreOn(event.detail.trace); M.hover(event.detail.trace);
+});
+
+$("#demo3dBtn").addEventListener("click", async () => {
+  busy(true, "กำลังสร้างแนวสแกนสังเคราะห์สำหรับ 3D…");
+  try { S.job = await post("/api/demo3d", {}); openProgress(); }
+  catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
+});
 // ------------------------------------------------------------------ summary before the report
 const WARN = {
   unreviewed: (w) => `${w.line_id}: ยังไม่ได้ตรวจ ${w.n} โซน`, not_approved: (w) => `${w.line_id}: ยังไม่ได้กด "ผ่าน"`,
@@ -757,6 +771,7 @@ async function openSummary() {
       </tbody></table></section>`;
   $$("#summaryView [data-export]").forEach((a) => (a.href = jobUrl(`/export/${a.dataset.export}`)));
 }
+
 
 // ------------------------------------------------------------------ comparison with reference software
 const jobUrl = (p) => `/api/jobs/${S.job.job_id}${p}`;

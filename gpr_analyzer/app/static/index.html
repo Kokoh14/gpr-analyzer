@@ -6,6 +6,8 @@
 <title>GPR Analyzer</title>
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/survey3d.css">
+<script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.min.js"}}</script>
 </head>
 <body>
 <header class="top">
@@ -89,6 +91,7 @@
   <div class="actions">
     <button class="btn primary big" id="runBtn" disabled>เริ่มวิเคราะห์</button>
     <button class="btn big ghost" id="demoBtn">ลองด้วยข้อมูลสังเคราะห์</button>
+    <button class="btn big ghost" id="demo3dBtn">ลอง 3D แบบที่ 1 · แนวสแกนสังเคราะห์</button>
   </div>
   <p class="muted center">ไฟล์ทั้งหมดอยู่ในเครื่องนี้เท่านั้น โปรแกรมเลือกฟิลเตอร์ให้อัตโนมัติ และปรับเองได้ในหน้าตรวจทาน</p>
 
@@ -151,7 +154,51 @@
         <button class="btn" id="sectionBtn" title="ลากบนภาพเพื่อเลือกช่วงระยะที่จะไม่ใช้ผล (ข้อมูลเสีย สิ่งกีดขวาง นอกพื้นที่)">✂ ไม่ใช้ผลช่วงนี้</button>
       </div>
     </div>
+    <details class="card survey3d-card" id="survey3dCard" open>
+      <summary><b>3D แบบที่ 1</b> <span class="muted small">ตำแหน่งสำรวจ · หน้าตัดตามแนวสแกน</span></summary>
+      <div class="s3-toolbar">
+        <label>พิกัด <select id="s3Frame"><option value="gps">GPS · WGS84 → East / North</option><option value="local">พิกัดท้องถิ่น · เมตร</option></select></label>
+        <label>ภาพหน้าตัด <select id="s3Track"><option value="grey">Amplitude · ขาวดำ</option><option value="envelope">Envelope · สีพลังงาน</option><option value="viewpoint">ViewPoint · สำหรับแสดงผล</option></select></label>
+        <label>ขยายแนวดิ่ง <select id="s3Exag"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+        <label>ความทึบ <input id="s3Opacity" type="range" min="0.1" max="1" value="0.9" step="0.05"></label>
+        <button class="btn small" id="s3Fit">พอดีพื้นที่</button>
+        <button class="btn small" id="s3Top">ด้านบน</button>
+        <button class="btn small" id="s3Front">ด้านข้าง</button>
+        <button class="btn small" id="s3Full">เต็มจอ</button>
+      </div>
+      <div class="s3-layout">
+        <div class="s3-stage" id="s3Stage" tabindex="0" aria-label="ฉากแนวสำรวจสามมิติ หมุนด้วยเมาส์ซ้าย เลื่อนด้วยเมาส์ขวา และซูมด้วยล้อเมาส์">
+          <div class="s3-badge">SURVEY SPACE <span>MODE 01 / FENCE VIEW</span></div>
+          <div class="s3-status" id="s3Status" role="status">เปิดงานสำรวจเพื่อแสดงแนวสแกน</div>
+          <div class="s3-labels" id="s3Labels"></div>
+          <div class="s3-legend" id="s3Legend"></div>
+          <div class="s3-readout" id="s3Readout">ลาก = หมุน · คลิกขวาลาก = เลื่อน · ล้อเมาส์ = ซูม · คลิกหน้าตัด = เปิดแนวใน 2D</div>
+        </div>
+        <div class="s3-side">
+          <h4>แนวสแกน <span id="s3Count"></span></h4>
+          <div class="s3-all"><button class="btn small" id="s3All">แสดงทั้งหมด</button><button class="btn small" id="s3None">ซ่อนทั้งหมด</button></div>
+          <div id="s3Lines"></div>
+          <div id="s3Excluded" class="small"></div>
+        </div>
+      </div>
+      <div class="s3-toolbar">
+        <label class="toggle"><input type="checkbox" id="s3Curtains" checked> หน้าตัดแนวดิ่ง</label>
+        <label class="toggle"><input type="checkbox" id="s3Paths" checked> เส้นทางสแกน</label>
+        <label class="toggle"><input type="checkbox" id="s3Slice" checked> ระนาบตัดตามแนวสแกน</label>
+        <label class="s3-depth">ระดับตัด <input type="range" id="s3Depth" min="0" max="5" step="0.01" value="1.5"> <output id="s3DepthValue">1.50 m</output></label>
+        <button class="btn small" id="s3Png">บันทึก PNG</button>
+        <button class="btn small" id="s3Json">ส่งออกฉาก JSON</button>
+      </div>
+      <p class="small muted" id="s3Datum"></p>
+      <p class="small muted s3-note">หน้าตัดแสดงข้อมูลที่วัดตามแนวสแกน ช่องว่างระหว่างแนวยังไม่มีข้อมูล · แถบแนวนอนมีความกว้างเพื่อการแสดงผล · สีเข้ม/พลังงานสูงไม่ยืนยันโพรง</p>
+      <details class="s3-placement"><summary>กำหนดพิกัดท้องถิ่นของแนวสำรวจ (กรณีไม่มี GPS)</summary>
+        <p class="small muted">ใช้หน่วยเมตรในระบบเดียวกันทุกแนว ระบุจุดเริ่ม–จบตามทิศทางเก็บข้อมูล โปรแกรมจะวางเป็นเส้นตรง ไม่ผสมกับฉาก GPS</p>
+        <form id="s3LayoutForm"><div class="s3-tablewrap"><table><thead><tr><th>ใช้</th><th>แนว / ไฟล์</th><th>เริ่ม E</th><th>เริ่ม N</th><th>จบ E</th><th>จบ N</th></tr></thead><tbody id="s3LayoutRows"></tbody></table></div>
+          <button class="btn primary small" type="submit">บันทึกพิกัดและเปิดฉากท้องถิ่น</button></form>
+      </details>
+    </details>
     <div class="line-status" id="lineStatus"></div>
+
     <details class="card mapcard" id="mapCard" open>
       <summary>แผนที่ (มุมมองจากด้านบน) <span class="muted small" id="mapNote"></span></summary>
       <div class="map-tools">
@@ -295,5 +342,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/app.js"></script>
+<script type="module" src="/static/survey3d.js"></script>
 </body>
 </html>

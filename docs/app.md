@@ -1,5 +1,9 @@
 # Local app (upload and review)
 
+The review page also has [3D แบบที่ 1 — survey fence view](3d-mode-1.md): positioned scan tracks,
+radargram curtains, a depth-strip slider, per-line visibility and PNG/scene JSON export. It uses
+the same processed data. The separate synthetic 3D demo contains eight parallel/crossing passes.
+
 ```bash
 pip install -e .[app]
 gpr-analyzer-app            # opens http://127.0.0.1:8765/ in the browser

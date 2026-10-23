@@ -29,7 +29,7 @@ include = ["gpr_analyzer*"]
 
 [tool.setuptools.package-data]
 "gpr_analyzer.report" = ["fonts/*.ttf", "fonts/OFL.txt"]
-"gpr_analyzer.app" = ["static/*", "static/vendor/leaflet/*", "static/vendor/leaflet/images/*"]
+"gpr_analyzer.app" = ["static/*", "static/vendor/leaflet/*", "static/vendor/leaflet/images/*", "static/vendor/three/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
