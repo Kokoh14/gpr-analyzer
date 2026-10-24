@@ -39,9 +39,8 @@ APP_VERSION = "0.1"
 VIEWS = ("grey", "high_gain", "envelope", "viewpoint")
 EDITABLE = ("trace_start", "trace_end", "time_top_ns", "time_bottom_ns", "suspected_type", "confidence", "action",
             "note")
-# Processing options the screen exposes; everything else stays automatic.
-OPTION_FIELDS = ("velocity_m_per_ns", "center_freq_mhz", "band_mhz", "background", "background_window_m",
-                 "gain_max_db", "agc_window_ns", "time_zero", "migration")
+# All processing fields must survive imported workflows and checkpoints.
+OPTION_FIELDS = tuple(f.name for f in fields(ProcessingOptions))
 
 
 def _now() -> str:
@@ -50,29 +49,29 @@ def _now() -> str:
 
 def parse_options(d: dict[str, Any] | None) -> ProcessingOptions:
     """ProcessingOptions from the form; blank values mean 'automatic'."""
-    opt = ProcessingOptions()
-    for k, v in (d or {}).items():
-        if k not in OPTION_FIELDS or v in (None, "", []):
+    from gpr_analyzer.processing.workflows import options_from_dict
+
+    if d is not None and not isinstance(d, dict):
+        raise ValueError("options must be an object")
+    clean = {}
+    strings = {"background", "background_statistic", "time_zero_source", "migration"}
+    for key, value in (d or {}).items():
+        if value in (None, "", []):
             continue
-        if k == "band_mhz":
-            lo, hi = (float(x) for x in v)
-            if not 0 < lo < hi:
-                raise ValueError("band_mhz needs 0 < low < high")
-            v = (lo, hi)
-        elif k == "time_zero":
-            v = bool(v)
-        elif k in ("background", "migration"):
-            v = str(v)
-        else:
-            v = float(v)
-            if v <= 0:
-                raise ValueError(f"{k} must be positive")
-        setattr(opt, k, v)
-    if opt.background not in ("sliding", "global", "none"):
-        raise ValueError("background must be sliding, global or none")
-    if opt.migration not in ("none", "stolt", "kirchhoff"):
-        raise ValueError("migration must be none, stolt or kirchhoff")
-    return opt
+        if key not in OPTION_FIELDS:
+            raise ValueError(f"unknown processing option: {key}")
+        if key == "band_mhz":
+            try:
+                value = [float(x) for x in value]
+            except (TypeError, ValueError):
+                raise ValueError("band_mhz needs [low, high]") from None
+        elif key not in strings | {"time_zero", "estimate_velocity"}:
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                raise ValueError(f"invalid {key}") from None
+        clean[key] = value
+    return options_from_dict(clean)
 
 
 def options_dict(opt: ProcessingOptions) -> dict[str, Any]:
@@ -541,8 +540,13 @@ class Job:
         ln = self.line(line_id)
         opt = parse_options(options)
         old, old_auto = list(ln.zones), set(ln.auto_zones)
+        previous = ln.options
         ln.options = opt
-        ln.process()
+        try:
+            ln.process()
+        except Exception:
+            ln.options = previous
+            raise
         carried, dropped = carry_reviews(ln, old, old_auto)
         if ln.status == "redo":
             ln.status = "pending"
