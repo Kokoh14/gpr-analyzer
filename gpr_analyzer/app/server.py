@@ -20,6 +20,8 @@ from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
 
 STATIC = Path(__file__).parent / "static"
 MEDIA = {".pdf": "application/pdf", ".html": "text/html; charset=utf-8", ".csv": "text/csv; charset=utf-8",
+         ".cnf": "text/plain; charset=utf-8", ".pobj": "text/plain; charset=utf-8",
+         ".lobj": "text/plain; charset=utf-8", ".zip": "application/zip",
          ".json": "application/json", ".sgy": "application/octet-stream",
          ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 
