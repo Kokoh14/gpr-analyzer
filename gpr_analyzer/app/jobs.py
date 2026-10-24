@@ -159,8 +159,23 @@ class LineState:
         lat, lon = pos
         n = len(lat) - 1
         i0, i1 = min(max(z.trace_start, 0), n), min(max(z.trace_end, 0), n)
-        return _replace(z, coord_start=(float(lon[i0]), float(lat[i0])), coord_end=(float(lon[i1]), float(lat[i1])),
-                        datum="WGS84")
+        out = _replace(z, coord_start=(float(lon[i0]), float(lat[i0])), coord_end=(float(lon[i1]), float(lat[i1])),
+                       datum="WGS84")
+        # Altitude is needed for Condor's GPS Z. Never substitute depth or zero for a missing altitude.
+        heights = {}
+        for g in self.raw.metadata.get("gps") or []:
+            try:
+                tr, height = float(g["trace"]), float(g["elevation"])
+                if np.isfinite([tr, height]).all() and g.get("quality") != 0:
+                    heights.setdefault(tr, height)
+            except (KeyError, TypeError, ValueError):
+                continue
+        if len(heights) >= 2:
+            traces = sorted(heights)
+            if traces[0] <= i0 <= i1 <= traces[-1]:
+                out = _replace(out, surface_elevation_start_m=float(np.interp(i0, traces, [heights[t] for t in traces])),
+                               surface_elevation_end_m=float(np.interp(i1, traces, [heights[t] for t in traces])))
+        return out
 
     def png(self, view: str) -> bytes:
         if view not in self.views():
@@ -765,9 +780,13 @@ class Job:
         """Write report.pdf/.docx/.html, zones.csv or survey.json into the job folder."""
         out = self.folder / "exports"
         out.mkdir(exist_ok=True)
-        allowed = {"report.pdf", "report.docx", "report.html", "zones.csv", "survey.json"}
+        allowed = {"report.pdf", "report.docx", "report.html", "zones.csv", "survey.json",
+                   "zones.cnf", "zones.pobj", "zones.lobj", "zones-condor.zip"}
         if name not in allowed:
             raise KeyError(name)
+        if name == "zones-condor.zip":
+            from gpr_analyzer.report.exports import condor_zip
+            return condor_zip(self.survey(), out / name)
         return write_report(self.survey(), out / name, lang=self.lang)
 
     def export_line(self, line_id: str, fmt: str) -> Path:
