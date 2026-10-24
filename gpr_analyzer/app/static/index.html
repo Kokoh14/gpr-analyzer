@@ -42,6 +42,8 @@
     <div id="browser" class="browser" hidden></div>
     <div id="scanResult" hidden>
       <div id="scanSummary" class="scan-summary"></div>
+      <label class="small">สีแผนที่ <select id="scanMetric"><option value="status">สถานะ</option><option value="gps_points_per_m">GPS points/m (ตามวงล้อ)</option><option value="traces_per_m">traces/m (ตามวงล้อ)</option></select></label>
+      <span id="scanLegend" class="small muted"></span>
       <div id="scanMap" class="scanmap"></div>
       <div class="actions left small">
         <button class="btn ghost small" data-sel="all">เลือกทั้งหมด</button>
@@ -50,7 +52,7 @@
         <span class="muted">ใส่ช่วงระยะ (m) เพื่อประมวลผลเฉพาะช่วงที่สนใจ เว้นว่าง = ทั้งเส้น</span>
       </div>
       <div class="scan-table"><table class="scan"><thead><tr><th></th><th>สถานะ</th><th>เส้น</th><th>trace</th><th>ความยาว</th><th>GPS</th>
-        <th>มาร์ก</th><th>ช่วงที่ประมวลผล (m)</th><th>ข้อสังเกต</th></tr></thead><tbody id="scanRows"></tbody></table></div>
+        <th>points/m · traces/m<br>เวลาเริ่ม–จบ (GPS)</th><th>มาร์ก</th><th>ช่วงที่ประมวลผล (m)</th><th>ข้อสังเกต</th></tr></thead><tbody id="scanRows"></tbody></table></div>
     </div>
   </section>
 

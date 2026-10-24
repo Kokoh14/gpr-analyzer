@@ -34,6 +34,9 @@ def test_scan_folder_reports_each_line(survey):
     ok = by["DEMO_LINE01"]
     assert ok["n_traces"] == 555 and ok["length_m"] == pytest.approx(27.75) and ok["gps_fixes"] == 56
     assert len(ok["track"]) == 200 and ok["gps_coverage"] > 0.95
+    assert ok["positioning"]["traces_per_m"] == 20
+    assert ok["positioning"]["gps_points_per_m"] > 1
+    assert ok["positioning"]["start_time"] and not ok["positioning"]["sharp_turns"]
     assert ok["status"] in ("ok", "warn") and not [i for i in ok["issues"] if i["level"] == "warn"]
     assert by["BROKEN"]["status"] == "error"
     codes = {i["code"] for i in by["NOGPS"]["issues"]}
