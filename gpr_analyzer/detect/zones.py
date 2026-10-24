@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.ndimage import binary_closing, binary_opening, find_objects, label
 
-from gpr_analyzer.core import Radargram
+from gpr_analyzer.core import Radargram, depth_from_time
 from gpr_analyzer.detect._signal import contrast_section
 from gpr_analyzer.detect.models import ArtifactFlag, Hyperbola, Zone
 
@@ -131,15 +131,16 @@ def find_zones(r: Radargram, artifacts: list[ArtifactFlag] | None = None,
         t0 = s0 * r.dt_ns - p.time_zero_ns
         t1 = s1 * r.dt_ns - p.time_zero_ns
         dx = r.dx_m
+        depths = depth_from_time([max(t0, 0.0), max(t1, 0.0)], v, r.metadata.get("antenna_separation_m") or 0.0)
         z = Zone(
             id=zone_id(i), trace_start=int(x0), trace_end=int(x1), sample_start=int(s0), sample_end=int(s1),
             time_start_ns=float(s0 * r.dt_ns), time_end_ns=float(s1 * r.dt_ns),
-            depth_top_m=v * max(t0, 0.0) / 2.0, depth_bottom_m=v * max(t1, 0.0) / 2.0,
+            depth_top_m=float(depths[0]), depth_bottom_m=float(depths[1]),
             velocity_m_per_ns=float(v), velocity_source=v_src,
             distance_start_m=None if dx is None else x0 * dx,
             distance_end_m=None if dx is None else x1 * dx,
             width_m=None if dx is None else (x1 - x0 + 1) * dx,
-            thickness_m=v * (t1 - t0) / 2.0, peak_contrast=round(peak, 3))
+            thickness_m=float(depths[1] - depths[0]), peak_contrast=round(peak, 3))
         z.nearby_artifacts = [a.id for a in artifacts or [] if _near(a, z, p.artifact_margin_traces)]
         zones.append(z)
     return zones

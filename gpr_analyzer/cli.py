@@ -131,6 +131,10 @@ def main(argv: list[str] | None = None) -> int:
         info = SurveyInfo(project=args.project, site=args.site, client=args.client, survey_date=args.date,
                           operator=args.operator, surface_use=args.surface, report_id=args.report_id)
         survey = build_survey(args.files, info, args.velocity)
+    # This export batch never changes the processed arrays or annotations between formats.
+    if len(args.report) > 1:
+        for ln in survey.lines:
+            ln.figure_cache = {}
     for out in args.report:
         path = write_report(survey, out, lang=args.lang)
         print(path)

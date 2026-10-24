@@ -4,9 +4,10 @@ import { OrbitControls } from "/static/vendor/three/OrbitControls.js";
 // Independent viewer: the only coupling to the 2D page is the gpr:job / gpr:3d-pick events.
 const $ = (id) => document.getElementById(id);
 const card = $("survey3dCard"), stage = $("s3Stage");
-const state = { job: null, selected: null, signature: "", data: null, hidden: new Set(), token: 0 };
+const state = { job: null, selected: null, signature: "", data: null, hidden: new Set(), token: 0, drafts: new Map() };
 let renderer, scene, camera, controls, root, scheduled = false, lineObjects = [], labels = [], span = 20;
 let east0 = 0, north0 = 0, maxDepth = 5, down = null;
+let hoverEvent = null, hoverScheduled = false, sliceScheduled = false;
 const raycaster = new THREE.Raycaster();
 const number = (n, d = 2) => Number(n).toFixed(d);
 const vec = (e, n, depth = 0) => new THREE.Vector3(e - east0, -depth, -(n - north0));
@@ -33,7 +34,18 @@ function init() {
     controls.addEventListener("change", draw);
     new ResizeObserver(resize).observe(stage);
     renderer.domElement.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; });
-    renderer.domElement.addEventListener("pointermove", (e) => pick(e, false));
+    renderer.domElement.addEventListener("pointermove", (e) => {
+      if (e.buttons || !card.open) { hoverEvent = null; return; }
+      hoverEvent = e;
+      if (hoverScheduled) return;
+      hoverScheduled = true;
+      requestAnimationFrame(() => {
+        hoverScheduled = false;
+        if (hoverEvent && card.open) pick(hoverEvent, false);
+        hoverEvent = null;
+      });
+    });
+    renderer.domElement.addEventListener("pointerleave", () => { hoverEvent = null; });
     renderer.domElement.addEventListener("click", (e) => {
       if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 5) pick(e, true);
     });
@@ -76,6 +88,7 @@ function draw() {
 }
 
 function clear() {
+  lineObjects.forEach((o) => o.pickMesh.geometry.dispose());
   if (root) {
     const materials = new Set(), textures = new Set();
     root.traverse((o) => { o.geometry?.dispose(); if (o.material) materials.add(o.material); });
@@ -113,11 +126,28 @@ function axes(x0, x1, n0, n1) {
   addLabel("DEPTH ↓", vec(x0 - span * 0.12, n0, bottom * 0.55));
 }
 
+function geometryRows(depths) {
+  // Texture UV stays on the original grid. Bound the error of its nonlinear depth mapping.
+  const keep = new Set([0, depths.length - 1]);
+  const tolerance = Math.max(0.001, Math.min(0.005, (depths.at(-1) - depths[0]) * 0.001));
+  const split = (a, b) => {
+    let worst = tolerance, at = -1;
+    for (let i = a + 1; i < b; i++) {
+      const error = Math.abs(depths[i] - (depths[a] + (depths[b] - depths[a]) * (i - a) / (b - a)));
+      if (error > worst) { worst = error; at = i; }
+    }
+    if (at >= 0) { keep.add(at); split(a, at); split(at, b); }
+  };
+  split(0, depths.length - 1);
+  return [...keep].sort((a, b) => a - b);
+}
+
 function curtain(line, texture) {
-  const positions = [], uvs = [], indices = [], nx = line.xy_m.length, ny = line.depth_m.length;
+  const rows = geometryRows(line.depth_m);
+  const positions = [], uvs = [], indices = [], nx = line.xy_m.length, ny = rows.length;
   for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-    const p = vec(...line.xy_m[i], line.depth_m[j]);
-    positions.push(p.x, p.y, p.z); uvs.push(i / (nx - 1), 1 - j / (ny - 1));
+    const p = vec(...line.xy_m[i], line.depth_m[rows[j]]);
+    positions.push(p.x, p.y, p.z); uvs.push(i / (nx - 1), 1 - rows[j] / (line.depth_m.length - 1));
   }
   for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
     const a = j * nx + i, b = a + nx; indices.push(a, b, a + 1, b, b + 1, a + 1);
@@ -130,6 +160,23 @@ function curtain(line, texture) {
   root.add(mesh); return mesh;
 }
 
+function pickingCurtain(line, mesh) {
+  // Each GPS segment is a vertical plane. Picking needs its boundary only; depth-to-UV
+  // is recovered from the original nonlinear sample grid after intersecting that plane.
+  const pos = [], uv = [], indices = [], nx = line.xy_m.length;
+  for (const [j, depth] of [line.depth_m[0], line.depth_m.at(-1)].entries()) {
+    for (let i = 0; i < nx; i++) {
+      const p = vec(...line.xy_m[i], depth); pos.push(p.x, p.y, p.z); uv.push(i / (nx - 1), 1 - j);
+    }
+  }
+  for (let i = 0; i < nx - 1; i++) indices.push(i, i + nx, i + 1, i + nx, i + nx + 1, i + 1);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(indices); g.computeBoundingSphere();
+  const proxy = new THREE.Mesh(g, mesh.material); proxy.userData.line = line; proxy.userData.kind = "curtain";
+  return proxy; // never rendered; shares the visible curtain's material and world transform
+}
+
 function sampleAtDepth(line, depth) {
   const ds = line.depth_m;
   if (depth < ds[0] || depth > ds.at(-1)) return null;
@@ -139,35 +186,36 @@ function sampleAtDepth(line, depth) {
 
 function slice(line, texture) {
   const g = new THREE.BufferGeometry(), m = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, transparent: false });
-  const mesh = new THREE.Mesh(g, m); mesh.userData.line = line; mesh.userData.kind = "slice"; root.add(mesh); return mesh;
+  const mesh = new THREE.Mesh(g, m); mesh.userData.line = line; mesh.userData.kind = "slice"; root.add(mesh);
+  const pos = [], uv = [], indices = [], xy = line.xy_m;
+  const width = Math.min(0.35, Math.max(0.08, span / 110));
+  for (let i = 0; i < xy.length - 1; i++) {
+    const [x, n] = xy[i], [x2, n2] = xy[i + 1], len = Math.hypot(x2 - x, n2 - n);
+    if (len < 1e-8) continue;
+    const dx = -(n2 - n) / len * width / 2, dn = (x2 - x) / len * width / 2, k = pos.length / 3;
+    for (const [e, north] of [[x + dx, n + dn], [x - dx, n - dn], [x2 + dx, n2 + dn], [x2 - dx, n2 - dn]]) {
+      const p = vec(e, north); pos.push(p.x, p.y, p.z);
+    }
+    for (const col of [i, i, i + 1, i + 1]) uv.push(col / (xy.length - 1), 0);
+    indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+  }
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(indices);
+  return mesh;
 }
 
 function updateSlice() {
   const depth = +$("s3Depth").value;
   $("s3DepthValue").textContent = `${number(depth)} m`;
-  const width = Math.min(0.35, Math.max(0.08, span / 110)); // display strip, NOT sensor footprint
   for (const o of lineObjects) {
-    const row = sampleAtDepth(o.data, depth), pos = [], uv = [], ind = [];
+    const row = sampleAtDepth(o.data, depth);
     o.strip.userData.depth = depth;
+    o.strip.userData.hasData = row != null;
     if (row != null) {
-      const xy = o.data.xy_m;
-      for (let i = 0; i < xy.length - 1; i++) {
-        const [x, n] = xy[i], [x2, n2] = xy[i + 1], len = Math.hypot(x2 - x, n2 - n);
-        if (len < 1e-8) continue;
-        const dx = -(n2 - n) / len * width / 2, dn = (x2 - x) / len * width / 2, k = pos.length / 3;
-        for (const [e, north] of [[x + dx, n + dn], [x - dx, n - dn], [x2 + dx, n2 + dn], [x2 - dx, n2 - dn]]) {
-          const p = vec(e, north, depth); pos.push(p.x, p.y, p.z);
-        }
-        uv.push(i / (xy.length - 1), 1 - row, i / (xy.length - 1), 1 - row,
-          (i + 1) / (xy.length - 1), 1 - row, (i + 1) / (xy.length - 1), 1 - row);
-        ind.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
-      }
+      const g = o.strip.geometry, pos = g.attributes.position, uv = g.attributes.uv;
+      for (let i = 0; i < pos.count; i++) { pos.setY(i, -depth); uv.setY(i, 1 - row); }
+      pos.needsUpdate = true; uv.needsUpdate = true; g.computeBoundingSphere();
     }
-    o.strip.geometry.dispose(); o.strip.geometry = new THREE.BufferGeometry();
-    o.strip.geometry.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-    o.strip.geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); o.strip.geometry.setIndex(ind);
-    if (pos.length) o.strip.geometry.computeBoundingSphere();
-    o.strip.userData.hasData = pos.length > 0;
   }
   visibility();
 }
@@ -218,7 +266,7 @@ function build(data) {
     const arrow = new THREE.ArrowHelper(direction, first, span * 0.055, 0x54eb9d, span * 0.018, span * 0.012); root.add(arrow);
     addLabel(`${line.line_id} · S`, first.clone().add(new THREE.Vector3(0, span * 0.025, 0)), line.line_id);
     addLabel("E", last.clone().add(new THREE.Vector3(0, span * 0.018, 0)), line.line_id);
-    lineObjects.push({ data: line, mesh, strip, track, arrow });
+    lineObjects.push({ data: line, mesh, strip, track, arrow, pickMesh: pickingCurtain(line, mesh) });
   }
   root.scale.y = +$("s3Exag").value;
   $("s3Depth").max = maxDepth; $("s3Depth").value = Math.min(+$("s3Depth").value, maxDepth);
@@ -256,14 +304,16 @@ function sidebar(data) {
 function placementRows(layout) {
   $("s3LayoutRows").replaceChildren();
   for (const line of state.job.lines) {
-    const p = layout.lines[line.line_id], row = document.createElement("tr"); row.dataset.lineId = line.line_id;
-    const on = document.createElement("input"); on.type = "checkbox"; on.checked = !!p;
+    const p = layout.lines[line.line_id], draft = state.drafts.get(line.line_id), row = document.createElement("tr"); row.dataset.lineId = line.line_id;
+    const on = document.createElement("input"); on.type = "checkbox"; on.checked = draft ? draft.enabled : !!p;
     const td = document.createElement("td"); td.append(on); row.append(td);
     const name = document.createElement("td"); name.textContent = `${line.line_id} · ${line.source_file}`; row.append(name);
-    for (const value of p ? [...p.start, ...p.end] : ["", "", "", ""]) {
+    for (const value of draft ? draft.values : p ? [...p.start, ...p.end] : ["", "", "", ""]) {
       const cell = document.createElement("td"), input = document.createElement("input"); input.type = "number"; input.step = "any"; input.value = value;
       input.addEventListener("input", () => { on.checked = true; }); cell.append(input); row.append(cell);
     }
+    const remember = () => state.drafts.set(line.line_id, { enabled: on.checked, values: [...row.querySelectorAll('input[type="number"]')].map((el) => el.value) });
+    row.addEventListener("input", remember); row.addEventListener("change", remember);
     $("s3LayoutRows").append(row);
   }
 }
@@ -283,13 +333,19 @@ async function load() {
 
 function pick(event, select) {
   if (!root || !state.data) return;
+  root.updateMatrixWorld(true);
   const rect = renderer.domElement.getBoundingClientRect();
   raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
-  const targets = lineObjects.flatMap((o) => [o.mesh, o.strip]).filter((o) => o.visible);
+  const targets = [];
+  for (const o of lineObjects) {
+    if (o.mesh.visible) { o.pickMesh.matrixWorld.copy(o.mesh.matrixWorld); targets.push(o.pickMesh); }
+    if (o.strip.visible) targets.push(o.strip);
+  }
   const hit = raycaster.intersectObjects(targets, false)[0];
   if (!hit?.uv) return;
   const line = hit.object.userData.line, col = Math.max(0, Math.min(line.xy_m.length - 1, hit.uv.x * (line.xy_m.length - 1)));
-  const row = Math.max(0, Math.min(line.depth_m.length - 1, (1 - hit.uv.y) * (line.depth_m.length - 1)));
+  const fraction = hit.object.userData.kind === "curtain" ? sampleAtDepth(line, -root.worldToLocal(hit.point.clone()).y) : 1 - hit.uv.y;
+  const row = Math.max(0, Math.min(line.depth_m.length - 1, (fraction ?? (1 - hit.uv.y)) * (line.depth_m.length - 1)));
   const trace = Math.round(lerpArray(line.trace_indices, col)), d = lerpArray(line.depth_m, row), t = lerpArray(line.time_ns, row);
   const sourceTrace = Math.round(lerpArray(line.source_trace_indices || line.trace_indices, col));
   const east = lerpArray(line.xy_m.map((p) => p[0]), col), north = lerpArray(line.xy_m.map((p) => p[1]), col);
@@ -318,13 +374,17 @@ $("s3LayoutForm").addEventListener("submit", async (event) => {
     await request(`/api/jobs/${encodeURIComponent(state.job.job_id)}/scene3d/layout`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines }),
     });
-    $("s3Frame").value = "local"; await load();
+    state.drafts.clear(); $("s3Frame").value = "local"; await load();
   } catch (e) { $("s3Status").textContent = e.message; }
 });
 
 for (const id of ["s3Frame", "s3Track"]) $(id).addEventListener("change", load);
 for (const id of ["s3Paths", "s3Curtains", "s3Slice"]) $(id).addEventListener("change", visibility);
-$("s3Depth").addEventListener("input", updateSlice);
+$("s3Depth").addEventListener("input", () => {
+  if (sliceScheduled) return;
+  sliceScheduled = true;
+  requestAnimationFrame(() => { sliceScheduled = false; updateSlice(); });
+});
 $("s3Opacity").addEventListener("input", () => { lineObjects.forEach((o) => { o.mesh.material.opacity = +$("s3Opacity").value; }); draw(); });
 $("s3Exag").addEventListener("change", () => { if (root && state.data) { root.scale.y = +$("s3Exag").value; sidebar(state.data); fit(); } });
 $("s3Fit").addEventListener("click", () => fit()); $("s3Top").addEventListener("click", () => fit("top")); $("s3Front").addEventListener("click", () => fit("front"));
@@ -355,10 +415,14 @@ card.addEventListener("toggle", () => { if (card.open) { state.data ? (resize(),
 
 function onJob({ job, line }) {
   if (!job) return;
-  const signature = JSON.stringify([job.job_id, job.lines.map((l) => [l.line_id, l.n_samples, l.n_traces, l.trace_offset, l.crop, l.velocity_m_per_ns, l.options])]);
-  if (state.job?.job_id !== job.job_id) { state.hidden.clear(); state.data = null; $("s3Frame").value = "gps"; }
+  const signature = JSON.stringify([job.job_id, job.lines.map((l) => [l.line_id, l.revision, l.n_samples, l.n_traces, l.trace_offset, l.crop, l.velocity_m_per_ns, l.options])]);
+  if (state.job?.job_id !== job.job_id) { state.hidden.clear(); state.drafts.clear(); state.data = null; $("s3Frame").value = "gps"; }
   state.job = job; state.selected = line;
-  if (state.signature !== signature) { state.signature = signature; load(); } else visibility();
+  if (state.signature !== signature) {
+    state.signature = signature; state.data = null; state.token++;
+    if (root) root.visible = false;
+    load();
+  } else visibility();
 }
 window.addEventListener("gpr:job", (e) => onJob(e.detail));
 const current = window.getGprSceneContext?.(); if (current?.job) onJob(current);

@@ -43,14 +43,14 @@ def depth_contrast(env: np.ndarray, period: int) -> np.ndarray:
     return env / np.maximum(row, floor)[:, None]
 
 
-def direct_wave_end(data: np.ndarray, period: int) -> int:
+def direct_wave_end(data: np.ndarray, period: int, env: np.ndarray | None = None) -> int:
     """First sample below the direct (air/ground) wave, or ~one period when there is none.
 
     The direct wave is the strong, laterally uniform event in the first few periods of a
     time-zero-corrected record. If background removal already took it out, nothing is skipped.
     """
     n = data.shape[0]
-    env = envelope(data)
+    env = envelope(data) if env is None else env
     row = np.median(env, axis=1)
     search = min(n, max(3 * period, n // 10))
     k = int(np.argmax(row[:search]))
@@ -59,19 +59,20 @@ def direct_wave_end(data: np.ndarray, period: int) -> int:
     return min(n - 1, period)
 
 
-def contrast_section(data: np.ndarray) -> tuple[np.ndarray, int, int]:
+def contrast_section(data: np.ndarray, env: np.ndarray | None = None) -> tuple[np.ndarray, int, int]:
     """(depth-normalised envelope, dominant period in samples, first sample below the direct wave)."""
     d = np.asarray(data, dtype=np.float64)
     per = dominant_period_samples(d)
-    c = depth_contrast(envelope(d), per)
+    env = envelope(d) if env is None else env
+    c = depth_contrast(env, per)
     c = uniform_filter(c, size=(max(1, per // 3), 3), mode="nearest")
-    return c, per, direct_wave_end(d, per)
+    return c, per, direct_wave_end(d, per, env)
 
 
-def surface_polarity(data: np.ndarray, period: int) -> int:
+def surface_polarity(data: np.ndarray, period: int, direct_end: int | None = None) -> int:
     """Sign (+1/−1) of the direct wave's main lobe, or 0 when there is no direct wave left."""
     d = np.asarray(data, dtype=np.float64)
-    end = direct_wave_end(d, period)
+    end = direct_wave_end(d, period) if direct_end is None else direct_end
     if end <= period:  # nothing strong at the top (already background-removed)
         return 0
     mean = d[:end].mean(axis=1)

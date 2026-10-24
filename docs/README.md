@@ -5,3 +5,4 @@
 - `report.md` — report outputs, zone schema for `detect/`, wording rules, fonts.
 - `detect.md` — zone detection, artifact flags, rule-based scores and the collapse-risk grade.
 - `viewpoint-fit.md` — ImpulseRadar ViewPoint matched on a real survey: depth, time zero, background window, gain, and how to re-run the check.
+- `reference-manuals.md` — what the Condor and GPR-SLICE user manuals document (processing defaults, features), compared with ours; manual-only, clean-room.

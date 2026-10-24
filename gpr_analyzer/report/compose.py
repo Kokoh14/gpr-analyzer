@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from gpr_analyzer.core import depth_from_time
+
 from gpr_analyzer.report.i18n import Translator
 from gpr_analyzer.report.rules import action_rank, suggest_action
 from gpr_analyzer.report.schema import ACTION_LEVELS, LineResult, SurveyResult, Zone
@@ -310,7 +312,7 @@ class _Composer:
             dv = dv or 0.02
             d = max((z.depth_bottom_m for z in zs), default=None) if zs else None
             if d is None:
-                d = ln.velocity_m_per_ns * ln.time_window_ns / 2
+                d = float(depth_from_time(ln.time_window_ns, ln.velocity_m_per_ns, ln.antenna_separation_m))
             items += [f"{self.t('line')} {ln.line_id}: {p}" for p in self.tr.paras(
                 "lim_velocity", v=fmt(ln.velocity_m_per_ns, 3), src=self.vsrc(ln.velocity_source),
                 dv=fmt(dv, 3), d=fmt(d, 1), dd=fmt(d * dv / ln.velocity_m_per_ns, 1))]

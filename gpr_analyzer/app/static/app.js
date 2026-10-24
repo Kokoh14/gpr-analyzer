@@ -367,11 +367,18 @@ function ticks(lo, hi, n, place) {
   for (let v = Math.ceil(lo / s) * s; v <= hi + 1e-9; v += s) out.push(place(v));
   return out.join("");
 }
+function depthAt(l, t) {
+  const h = l.velocity_m_per_ns * t / 2, s = (l.metadata?.antenna_separation_m || 0) / 2;
+  return h > 0 ? Math.sqrt(Math.max((h + s) ** 2 - s * s, 0)) : h;
+}
+function timeAtDepth(l, d) {
+  const s = (l.metadata?.antenna_separation_m || 0) / 2;
+  return 2 * (d > 0 ? Math.sqrt(d * d + s * s) - s : d) / l.velocity_m_per_ns;
+}
 function yTicks(l, kind) {
   const T = l.time_window_ns, { y0, y1 } = S.view, f = (t) => ((t / T - y0) / (y1 - y0)) * 100;
   if (kind === "t") return ticks(y0 * T, y1 * T, 5, (t) => `<span style="top:${f(t)}%">${+t.toFixed(2)}</span>`) + `<span class="ttl">เวลา (ns)</span>`;
-  const k = l.velocity_m_per_ns / 2;  // depth = t v / 2
-  return ticks(y0 * T * k, y1 * T * k, 5, (d) => `<span style="top:${f(d / k)}%">${+d.toFixed(2)}</span>`) + `<span class="ttl">ความลึก (m)</span>`;
+  return ticks(depthAt(l, y0 * T), depthAt(l, y1 * T), 5, (d) => `<span style="top:${f(timeAtDepth(l, d))}%">${+d.toFixed(2)}</span>`) + `<span class="ttl">ความลึก (m)</span>`;
 }
 function xTicks(l) {
   const N = l.n_traces, { x0, x1 } = S.view, f = (t) => ((t / N - x0) / (x1 - x0)) * 100;
@@ -418,11 +425,11 @@ function centreOn(trace) {  // keep the zoom, move the window so the trace is in
 function drawGuides() {
   const l = line(); if (!l) return;
   $$(".guide").forEach((g) => g.remove());
-  const band = M.data?.slice && M.band(), T = l.time_window_ns, k = l.velocity_m_per_ns / 2;
+  const band = M.data?.slice && M.band(), T = l.time_window_ns;
   $$(".zoomer").forEach((z) => {
     if (S.cursor != null) z.insertAdjacentHTML("beforeend", `<div class="guide vline" style="left:${((S.cursor + 0.5) / l.n_traces) * 100}%"></div>`);
     if (band && !$("#mapCard").hidden) {
-      const t0 = band[0] / k / T, t1 = band[1] / k / T;
+      const t0 = timeAtDepth(l, band[0]) / T, t1 = timeAtDepth(l, band[1]) / T;
       z.insertAdjacentHTML("beforeend", `<div class="guide hband" style="top:${t0 * 100}%;height:${Math.max((t1 - t0) * 100, 0.3)}%"></div>`);
     }
   });
@@ -931,7 +938,7 @@ document.addEventListener("mousemove", (e) => {
   const w = e.target.closest?.(".imgwrap");
   if (w && line()) {
     const p = pos(e, w), l = line();
-    $("#readout").textContent = `trace ${p.trace}${l.dx_m ? ` · ระยะ ${((p.trace + (l.trace_offset || 0)) * l.dx_m).toFixed(2)} m` : ""} · เวลา ${p.t.toFixed(1)} ns · ลึก ${(p.t * l.velocity_m_per_ns / 2).toFixed(2)} m (v ${l.velocity_m_per_ns.toFixed(3)})`
+    $("#readout").textContent = `trace ${p.trace}${l.dx_m ? ` · ระยะ ${((p.trace + (l.trace_offset || 0)) * l.dx_m).toFixed(2)} m` : ""} · เวลา ${p.t.toFixed(1)} ns · ลึก ${depthAt(l, p.t).toFixed(2)} m (v ${l.velocity_m_per_ns.toFixed(3)})`
       + (M.data?.has_gps ? " · ดูจุดนี้บนแผนที่ได้" : "");
     M.hover(p.trace);
   }
@@ -962,7 +969,7 @@ document.addEventListener("mousedown", (e) => {
 document.addEventListener("mouseup", async () => {
   if (S.pan) {
     const { moved, start } = S.pan; S.pan = null;
-    if (!moved) { S.cursor = start.trace; M.pickDepth(start.t * line().velocity_m_per_ns / 2); M.hover(start.trace, true); drawGuides(); }
+    if (!moved) { S.cursor = start.trace; M.pickDepth(depthAt(line(), start.t)); M.hover(start.trace, true); drawGuides(); }
     return;
   }
   if (!S.drag) return;

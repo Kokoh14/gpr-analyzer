@@ -7,6 +7,7 @@ trace number at the top, two-way time (ns) on the left, depth (m) on the right.
 from __future__ import annotations
 
 import io
+import json
 
 import matplotlib
 
@@ -16,6 +17,7 @@ import numpy as np  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
 
 from gpr_analyzer.report.schema import LineResult  # noqa: E402
+from gpr_analyzer.core import depth_from_time, time_from_depth  # noqa: E402
 
 ACTION_COLOURS = {"E": "#b0002a", "1": "#e8590c", "2": "#f2b705", "3": "#2f80ed", "none": "#7d8590"}
 
@@ -31,6 +33,11 @@ def render_line(line: LineResult, view: str = "gray", actions: dict[str, str] | 
                 width_in: float = 7.0, height_in: float = 3.2, dpi: int = 150) -> bytes:
     """PNG bytes of one line. view = "gray" (processed amplitude) or "envelope" (colour energy)."""
     r = line.radargram
+    # Caller keeps the cache only for the lifetime of this immutable processing result.
+    key = json.dumps([line.to_dict(), actions or {}, width_in, height_in, dpi], sort_keys=True, default=str) if line.figure_cache is not None else None
+    previous = line.figure_cache.get(view) if line.figure_cache is not None else None
+    if previous is not None and previous[0] is r and previous[1] == key:
+        return previous[2]
     data = np.asarray(r.data, dtype=np.float64)
     n_s, n_t = data.shape
     t_max = n_s * r.dt_ns
@@ -87,7 +94,9 @@ def render_line(line: LineResult, view: str = "gray", actions: dict[str, str] | 
     else:
         ax.set_xlabel("trace", fontsize=7)
     v = line.velocity_m_per_ns
-    right = ax.secondary_yaxis("right", functions=(lambda t: t * v / 2.0, lambda d: d * 2.0 / v))
+    sep = line.antenna_separation_m
+    right = ax.secondary_yaxis("right", functions=(lambda t: depth_from_time(t, v, sep),
+                                                  lambda d: time_from_depth(d, v, sep)))
     right.set_ylabel(f"depth (m), v = {v:.3f} m/ns", fontsize=7)
     right.tick_params(labelsize=6)
     ax.set_xlim(-0.5, n_t - 0.5)
@@ -96,4 +105,7 @@ def render_line(line: LineResult, view: str = "gray", actions: dict[str, str] | 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi)
     plt.close(fig)
-    return buf.getvalue()
+    png = buf.getvalue()
+    if line.figure_cache is not None:
+        line.figure_cache[view] = (r, key, png)
+    return png

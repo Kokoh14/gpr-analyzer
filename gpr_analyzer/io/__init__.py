@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gpr_analyzer.core import Radargram
+from gpr_analyzer.core import Radargram, crop_to_range
 from gpr_analyzer.io.gssi import read_dzt
 from gpr_analyzer.io.impulseradar import read_cor, read_impulseradar, read_mala
 from gpr_analyzer.io.segy import read_segy, write_segy
@@ -30,7 +30,7 @@ READERS = {
 SUPPORTED_EXTENSIONS = tuple(sorted(READERS))
 
 
-def read(path: str | Path) -> list[Radargram]:
+def read(path: str | Path, *, range_m: tuple[float | None, float | None] | None = None) -> list[Radargram]:
     """Read any supported GPR file. Raises ValueError for unknown extensions
     (for an unknown binary format, use gpr_analyzer.io.sniff)."""
     path = Path(path)
@@ -39,6 +39,10 @@ def read(path: str | Path) -> list[Radargram]:
         raise ValueError(
             f"{path.name}: unsupported file type {path.suffix!r}; supported: {', '.join(SUPPORTED_EXTENSIONS)}"
         )
+    if range_m is not None:
+        if reader in (read_impulseradar, read_mala):
+            return reader(path, range_m=range_m)
+        return [crop_to_range(rg, *range_m)[0] for rg in reader(path)]
     return reader(path)
 
 

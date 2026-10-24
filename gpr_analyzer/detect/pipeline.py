@@ -9,8 +9,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+import numpy as np
+
 from gpr_analyzer.core import Radargram
-from gpr_analyzer.detect._signal import contrast_section, surface_polarity
+from gpr_analyzer.detect._signal import contrast_section, surface_polarity, envelope
 from gpr_analyzer.detect.artifacts import ArtifactParams, detect_artifacts
 from gpr_analyzer.detect.classify import ClassifyParams, Context, classify_zone
 from gpr_analyzer.detect.hyperbola import HyperbolaParams, estimate_velocity, find_hyperbolas
@@ -31,16 +33,20 @@ class DetectParams:
 
 
 def analyze_line(r: Radargram, params: DetectParams | None = None, risk_context: RiskContext | None = None,
-                 velocity_m_per_ns: float | None = None, velocity_source: str | None = None) -> DetectionResult:
+                 velocity_m_per_ns: float | None = None, velocity_source: str | None = None, *,
+                 envelope_data: np.ndarray | None = None) -> DetectionResult:
     """Detect, classify and grade one line.
 
     velocity_m_per_ns / velocity_source: pass the processing stage's velocity (e.g. its
     hyperbola fit) to use it instead of this module's own estimate.
     """
     p = params or DetectParams()
-    contrast = contrast_section(r.data)
+    env = envelope(r.data.astype(float)) if envelope_data is None else envelope_data
+    if env.shape != r.data.shape:
+        raise ValueError("envelope_data must have the analysis grid shape")
+    contrast = contrast_section(r.data, env)
     c, per, top = contrast
-    artifacts = detect_artifacts(r, p.artifacts)
+    artifacts = detect_artifacts(r, p.artifacts, env=env, period=per)
     hyps = find_hyperbolas(r, p.hyperbola, contrast=contrast, artifacts=artifacts)
     vel = estimate_velocity(r, p.hyperbola, hyperbolas=hyps)
 
@@ -55,7 +61,7 @@ def analyze_line(r: Radargram, params: DetectParams | None = None, risk_context:
 
     zones = find_zones(r, artifacts, velocity_m_per_ns=v, velocity_source=v_src, params=p.zones, contrast=contrast,
                        hyperbolas=hyps)
-    sign = p.surface_polarity if p.surface_polarity is not None else surface_polarity(r.data, per)
+    sign = p.surface_polarity if p.surface_polarity is not None else surface_polarity(r.data, per, top)
     ctx = Context(data=r.data.astype(float), contrast=c, period=per, surface_sign=sign, hyperbolas=hyps,
                   artifacts=artifacts, dt_ns=r.dt_ns)
     rc = risk_context or RiskContext()
@@ -95,7 +101,7 @@ _GRADE_TO_ACTION = {1: "E", 2: "1", 3: "2", 4: "3"}
 def to_report_records(res: DetectionResult, line_id: str = "") -> tuple[list[dict], list[dict]]:
     """(zones, artifact_regions) as dicts in the gpr_analyzer.report.schema layout.
 
-    Times are relative to time zero so the report's depth = v·t/2 matches ours. "not_assessed"
+    Times are relative to time zero, with antenna separation carried to report depth conversion. "not_assessed"
     evidence has no report kind yet and goes out as a warning with not_assessed=True in params.
     The action comes from the collapse-risk grade for void-like zones (I→E, II→1, III→2, IV→3);
     for other zones it is left to the report's own rules.
@@ -121,6 +127,7 @@ def to_report_records(res: DetectionResult, line_id: str = "") -> tuple[list[dic
             "zone_id": z.id, "line_id": line_id, "trace_start": z.trace_start, "trace_end": z.trace_end,
             "time_top_ns": max(0.0, z.time_start_ns - t0), "time_bottom_ns": max(0.0, z.time_end_ns - t0),
             "velocity_m_per_ns": z.velocity_m_per_ns,
+            "antenna_separation_m": res.source.get("antenna_separation_m") or 0.0,
             "velocity_source": "hyperbola_fit" if z.velocity_source.startswith("hyperbola") else z.velocity_source,
             "velocity_uncertainty_m_per_ns": unc,
             "suspected_type": _REPORT_TYPE.get(z.suspected_type, z.suspected_type.value),

@@ -67,14 +67,15 @@ class ProcessingResult:
 
     analysis / display / envelope / energy share the same grid (time zero at row 0).
     layers: same as analysis but without background removal (keeps flat reflectors).
+    When tracks is supplied, unrequested optional outputs are None.
     """
 
     raw: Radargram
     analysis: Radargram
-    display: Radargram
-    layers: Radargram
-    envelope: Radargram
-    energy: Radargram
+    display: Radargram | None
+    layers: Radargram | None
+    envelope: Radargram | None
+    energy: Radargram | None
     migrated: Radargram | None
     velocity_m_per_ns: float
     velocity_source: str  # human-readable, e.g. "hyperbola fit (median of 3)"
@@ -108,7 +109,7 @@ def auto_process(rg: Radargram, options: ProcessingOptions | None = None) -> tup
     """
     if options is None and rg.metadata.get("velocity_source") == "user":
         options = ProcessingOptions(velocity_m_per_ns=rg.velocity_m_per_ns)
-    res = run_pipeline(rg, options)
+    res = run_pipeline(rg, options, tracks={"analysis"})
     out = res.analysis.copy_with()
     steps = res.report_steps()
     out.metadata["velocity_source"] = res.velocity_source_code
@@ -130,9 +131,12 @@ class _ReportingLog(list):
 
 
 def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
-                 progress: Callable[[str], None] | None = None) -> ProcessingResult:
-    """progress: optional callback called with each step name as it finishes."""
+                 progress: Callable[[str], None] | None = None, *, tracks: set[str] | None = None) -> ProcessingResult:
+    """progress reports completed steps. tracks=None keeps all outputs for existing API callers."""
     opt = options or ProcessingOptions()
+    tracks = {"analysis", "display", "layers", "envelope", "energy", "viewpoint"} if tracks is None else tracks
+    if tracks - {"analysis", "display", "layers", "envelope", "energy", "viewpoint"}:
+        raise ValueError("unknown processing track")
     log: list[StepLog] = _ReportingLog(progress) if progress else []
     dt = rg.dt_ns
     d = rg.data.astype(np.float32)
@@ -206,7 +210,7 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
     hi = min(hi, 0.95 * 0.5e3 / dt)
     d = F.bandpass(d, dt, lo, hi)
     log.append(StepLog("bandpass", {"low_mhz": round(lo, 1), "high_mhz": round(hi, 1), "type": "Butterworth order 4, zero-phase"}, why, opt.band_mhz is None))
-    no_bgr = d.copy()
+    no_bgr = d.copy() if "layers" in tracks else None
 
     # 5. Background removal
     if opt.background == "none":
@@ -236,7 +240,7 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
     nf = F.estimate_noise_floor(decay)
     gain, cap, rate_db = F.sec_gain_curve(decay, dt, nf, max_gain_db=opt.gain_max_db)
     analysis = F.apply_gain(d, gain)
-    layers = F.apply_gain(no_bgr, gain)
+    layers = F.apply_gain(no_bgr, gain) if no_bgr is not None else None
     log.append(
         StepLog(
             "gain_sec",
@@ -288,34 +292,39 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
             log.append(StepLog("migration", {"method": opt.migration, "velocity_m_per_ns": round(v, 4)}, "requested by user", False))
 
     # 9. Attributes
-    env = F.envelope(analysis)
+    env = F.envelope(analysis) if "envelope" in tracks else None
     ew = opt.energy_window_ns or 2.0 * period
-    en = F.energy(analysis, dt, ew)
-    log.append(StepLog("envelope", {"envelope": "Hilbert", "energy_window_ns": round(ew, 2)}, "computed on the analysis track", opt.energy_window_ns is None))
+    en = F.energy(analysis, dt, ew) if "energy" in tracks else None
+    if env is not None or en is not None:
+        log.append(StepLog("envelope", {"envelope": "Hilbert" if env is not None else "not requested",
+                                      "energy_window_ns": round(ew, 2) if en is not None else None},
+                           "requested attributes computed on the analysis track", opt.energy_window_ns is None))
 
     # 10. Display track
     aw = opt.agc_window_ns or 10.0 * period
-    nrms = 5.0 * F.noise_rms(d, dt, aw)
-    display = F.agc(d, dt, aw, noise_rms=nrms)
-    log.append(
-        StepLog(
-            "agc",
-            {"window_ns": round(aw, 1), "noise_stabiliser": float(f"{nrms:.3g}")},
-            "display only: AGC equalises amplitude, so it is never used for detection or scoring; stabilised at 5x the noise level so empty areas stay quiet",
-            opt.agc_window_ns is None,
+    nrms = 5.0 * F.noise_rms(d, dt, aw) if "display" in tracks else 0.0
+    display = F.agc(d, dt, aw, noise_rms=nrms) if "display" in tracks else None
+    if display is not None:
+        log.append(
+            StepLog(
+                "agc",
+                {"window_ns": round(aw, 1), "noise_stabiliser": float(f"{nrms:.3g}")},
+                "display only: AGC equalises amplitude, so it is never used for detection or scoring; stabilised at 5x the noise level so empty areas stay quiet",
+                opt.agc_window_ns is None,
+            )
         )
-    )
 
     # 11. ViewPoint-like track (same zero as above, its own fitted background window and gain)
     zero_used = int(zl) if use_header else (target if opt.time_zero else 0)
-    vp, vp_params = viewpoint_display(rg, zero_sample=zero_used)
-    log.append(
-        StepLog(
-            "viewpoint_display",
-            vp_params,
-            "display only: reproduces the ImpulseRadar ViewPoint screen (fitted to its screenshots, docs/viewpoint-fit.md)",
+    vp, vp_params = viewpoint_display(rg, zero_sample=zero_used) if "viewpoint" in tracks else (None, {})
+    if vp is not None:
+        log.append(
+            StepLog(
+                "viewpoint_display",
+                vp_params,
+                "display only: reproduces the ImpulseRadar ViewPoint screen (fitted to its screenshots, docs/viewpoint-fit.md)",
+            )
         )
-    )
 
     def mk(arr: np.ndarray, kind: str) -> Radargram:
         out = rg.copy_with(data=arr, velocity_m_per_ns=v)
@@ -327,10 +336,10 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
     return ProcessingResult(
         raw=rg,
         analysis=mk(analysis, "analysis"),
-        display=mk(display, "display"),
-        layers=mk(layers, "layers"),
-        envelope=mk(env, "envelope"),
-        energy=mk(en, "energy"),
+        display=mk(display, "display") if display is not None else None,
+        layers=mk(layers, "layers") if layers is not None else None,
+        envelope=mk(env, "envelope") if env is not None else None,
+        energy=mk(en, "energy") if en is not None else None,
         migrated=mk(migrated, "migrated") if migrated is not None else None,
         velocity_m_per_ns=v,
         velocity_source=vsrc,
@@ -339,5 +348,5 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
         gain_curve=gain,
         noise_floor_sample=cap,
         log=log,
-        viewpoint=mk(vp.data, "viewpoint"),
+        viewpoint=mk(vp.data, "viewpoint") if vp is not None else None,
     )
