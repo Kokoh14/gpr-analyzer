@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 
 from gpr_analyzer.app import geo
+from gpr_analyzer.app.positioning import positioning_qa
 from gpr_analyzer.app.files import FAMILIES, sort_files
 from gpr_analyzer.io._util import parse_key_value_header, read_text, to_float
 from gpr_analyzer.io.impulseradar import _side_file, read_cor, read_mrk
@@ -151,11 +152,17 @@ def check_impulseradar(primary: Path) -> dict[str, Any]:
 
     cor = _side_file(dat, ".cor")
     out["gps_fixes"] = 0
+    out["positioning"] = positioning_qa([], n_traces, dx)
     if cor is None:
         iss.append(_issue("warn", "no_gps", "ไม่มีไฟล์ GPS (.cor) วางบนแผนที่ไม่ได้"))
     else:
         rows = read_cor(cor)
         out["gps_fixes"] = len(rows)
+        qa = out["positioning"] = positioning_qa(rows, n_traces, dx)
+        if qa["low_density"]:
+            iss.append(_issue("warn", "gps_density", f"GPS จุดห่างตามวงล้อสูงสุด {qa['max_wheel_gap_m']:.1f} m (>5 m): ตรวจความหนาแน่น ไม่ยืนยันว่าเสีย fix"))
+        if qa["sharp_turns"]:
+            iss.append(_issue("warn", "sharp_turn", "แนวเลี้ยวกลับ ≥120°: อาจเกิด swath ซ้อนกัน (เกณฑ์เตือน ไม่ใช่ผลตรวจขอบ swath)"))
         pos = geo.trace_positions(rows, max(n_traces, 1))
         if pos is None:
             iss.append(_issue("warn", "gps_unusable", f"ไฟล์ GPS {cor.name} มีพิกัดที่ใช้ได้น้อยกว่า 2 จุด"))
