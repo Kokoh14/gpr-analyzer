@@ -123,3 +123,20 @@ def write_fence_demo_files(folder: Path) -> list[Path]:
         paths.append(write_cor(rg, stem.with_suffix(".cor"), 13.7386 + y / 111320,
                                100.531 + x / (111320 * np.cos(np.radians(13.7386))), heading))
     return paths
+
+
+def write_volume_demo_files(folder: Path) -> list[Path]:
+    """Nine parallel eastward passes 0.5 m apart for the 3D volume: a pipe at 6 m along every line
+    (1.0 m deep) and an air-filled cavity at 10–12 m on passes 4–6 only (1.2–1.8 m deep)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for i in range(9):
+        rg, _ = make_scene(n_traces=161, n_samples=320, time_window_ns=100, dx_m=0.1,
+                           velocity_m_per_ns=0.1, seed=70 + i, artifact_traces=[], ringing_ns=None,
+                           targets=[PointTarget(6.0, 1.0)], layers=[Layer(3.0, 0.4, 0.0)])
+        if 3 <= i <= 5:
+            add_cavity(rg, 10.0, 12.0, 1.2, 1.8, time_zero_ns=6.0)
+        stem = folder / f"SYNTHETIC_VOLUME_{i + 1:02d}"
+        paths += write_impulseradar(rg, stem)
+        paths.append(write_cor(rg, stem.with_suffix(".cor"), 13.7386 + i * 0.5 / 111320, 100.531, 90.0))
+    return paths
