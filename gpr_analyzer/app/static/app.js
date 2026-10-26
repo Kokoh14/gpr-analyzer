@@ -309,9 +309,10 @@ window.getGprSceneContext = () => ({ job: S.job, line: S.line });
 function renderTop() {
   const j = S.job, r = j.review, n = r.auto + r.accepted + r.edited + r.rejected;
   $("#jobMeta").innerHTML = `<b>${esc(j.info.project || "งานสำรวจ")}</b> <span class="muted">${esc(j.info.site || "")}</span>
-    <span class="badge ${j.draft ? "draft" : "done"}">${j.draft ? "ฉบับร่าง: ยังไม่ได้ตรวจทุกโซน" : "ตรวจครบทุกโซน"}</span>
+    <span class="badge ${j.draft ? "draft" : "done"}" title="${esc(j.draft_reasons.join("\n"))}">${j.draft ? "ฉบับร่าง" : "พร้อมฉบับจริง"}</span>
     <span class="muted small">ตรวจแล้ว ${n - r.auto}/${n} โซน</span>`;
   $$("[data-export]").forEach((a) => (a.href = `/api/jobs/${j.job_id}/export/${a.dataset.export}`));
+  $$("[data-package]").forEach((a) => (a.href = `/api/jobs/${j.job_id}/report-package`));
   $("#labelsLink").href = `/api/jobs/${j.job_id}/labels.jsonl`;
 }
 function renderLines() {
@@ -780,10 +781,17 @@ async function openSummary() {
   const surf = { unknown: "ไม่ระบุ", road: "ถนน", building: "อาคาร", open: "พื้นที่โล่ง" };
   const types = (o) => Object.entries(o).map(([k, v]) => `${(TYPE[k] || TYPE.unknown)[0]} ${v}`).join(", ") || "–";
   $("#summaryBody").innerHTML = `
-    <section class="card"><h3>${s.ready ? "✓ พร้อมออกรายงาน" : "⚠ ตรวจรายการด้านล่างก่อนออกรายงาน"}</h3>
+    <section class="card"><h3>${s.final ? "✓ ออกรายงานฉบับยืนยันผลได้" : "รายงานจะออกเป็นฉบับร่าง (มีลายน้ำ) เพราะ:"}</h3>
+      ${s.final ? `<p class="muted">ทุกเส้นกด "ผ่าน" แล้ว ทุกโซนผ่านการตรวจโดย ${esc(s.reviewer)} กด "รายงานครบชุด ZIP" เพื่อสร้าง PDF + Word + CSV + KMZ พร้อมกัน</p>`
+        : `<ul class="warns">${s.draft_reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`}</section>
+    <section class="card"><h3>${s.ready ? "✓ ไม่มีคำเตือน" : "⚠ คำเตือนก่อนออกรายงาน"}</h3>
       ${s.warnings.length ? `<ul class="warns">${s.warnings.map((w) => `<li>${w.line_id ? `<a href="#" data-goline="${esc(w.line_id)}">` : ""}${esc((WARN[w.code] || ((x) => x.code))(w))}${w.line_id ? "</a>" : ""}</li>`).join("")}</ul>`
         : `<p class="muted">ทุกเส้นผ่านการตรวจ ตรวจทุกโซนแล้ว และกรอกข้อมูลงานครบ</p>`}
-      <p class="small muted">รายงานยังออกได้แม้มีคำเตือน แต่จะมีแถบ "ฉบับร่าง" ถ้ายังมีโซนที่ไม่ได้ตรวจ</p></section>
+      <p class="small muted">รายงานออกได้เสมอ แต่จะเป็นฉบับร่างจนกว่าทุกโซนจะผ่านการตรวจ ทุกเส้นกด "ผ่าน" และระบุชื่อผู้ตรวจทาน</p></section>
+    <section class="card"><h3>ภาพที่จะใส่ในรายงาน <span class="muted small">(กด "ใส่ภาพนี้ในรายงาน" ในมุมมอง 3D)</span></h3>
+      ${s.snapshots.length ? `<div class="chips">${s.snapshots.map((p) => `<figure class="snap"><img src="${jobUrl(`/snapshots/${p.snapshot_id}.png`)}" alt="" style="max-width:220px;display:block">
+        <figcaption class="small">${esc(p.snapshot_id)} · ${esc(p.caption || "–")} <button class="btn ghost small" data-delsnap="${esc(p.snapshot_id)}">ลบ</button></figcaption></figure>`).join("")}</div>`
+        : `<p class="muted small">ยังไม่มีภาพ รายงานจะมีแผนที่แนวสำรวจและภาพหน้าตัดทุกเส้นอยู่แล้ว</p>`}</section>
     <section class="card"><h3>ข้อมูลงาน</h3>
       <div class="kv"><span>โครงการ</span><b>${esc(info.project || "–")}</b><span>สถานที่</span><b>${esc(info.site || "–")}</b>
         <span>ผู้ว่าจ้าง</span><b>${esc(info.client || "–")}</b><span>วันที่สำรวจ</span><b>${esc(info.survey_date || "–")}</b>
@@ -812,6 +820,10 @@ async function openSummary() {
         <td class="small">${l.sections.map((x) => `${esc(x.section_id)} ${esc(x.reason)}`).join("<br>") || "–"}</td></tr>`).join("")}
       </tbody></table></section>`;
   $$("#summaryView [data-export]").forEach((a) => (a.href = jobUrl(`/export/${a.dataset.export}`)));
+  $$("#summaryView [data-package]").forEach((a) => (a.href = jobUrl("/report-package")));
+  $$("[data-delsnap]").forEach((b) => b.addEventListener("click", async () => {
+    try { await api(jobUrl(`/snapshots/${b.dataset.delsnap}`), { method: "DELETE" }); openSummary(); } catch (e) { toast(e.message); }
+  }));
 }
 
 

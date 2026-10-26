@@ -335,4 +335,31 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         return Response(text, media_type="application/x-ndjson",
                         headers={"Content-Disposition": f'attachment; filename="{job_id}_labels.jsonl"'})
 
+    @app.get("/api/jobs/{job_id}/report-package")
+    def report_package(job_id: str) -> FileResponse:
+        """One click: report (PDF + Word), zones CSV + KMZ, survey JSON, labels and a manifest in one ZIP."""
+        j = job(job_id)
+        with j.lock:
+            path = guarded(j.report_package)
+        return FileResponse(path, media_type="application/zip", filename=f"{j.job_id}_{path.name}")
+
+    @app.post("/api/jobs/{job_id}/snapshots")
+    def add_snapshot(job_id: str, file: UploadFile = File(...), caption: str = Form(""),
+                     source: str = Form("other")) -> list[dict]:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.add_snapshot, file.file.read(), caption, source)
+            return j.snapshots()
+
+    @app.get("/api/jobs/{job_id}/snapshots/{snapshot_id}.png")
+    def get_snapshot(job_id: str, snapshot_id: str) -> FileResponse:
+        return FileResponse(guarded(job(job_id).snapshot_path, snapshot_id), media_type="image/png")
+
+    @app.delete("/api/jobs/{job_id}/snapshots/{snapshot_id}")
+    def delete_snapshot(job_id: str, snapshot_id: str) -> list[dict]:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.delete_snapshot, snapshot_id)
+            return j.snapshots()
+
     return app

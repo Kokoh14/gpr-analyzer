@@ -16,6 +16,7 @@
   <div class="exports" id="exports" hidden>
     <button class="btn primary" id="summaryBtn" title="ตรวจข้อมูลสำคัญอีกครั้งก่อนออกรายงาน">สรุปก่อนออกรายงาน</button>
     <span class="exp-label">ส่งออก</span>
+    <a class="btn" data-package title="รายงาน PDF + Word, ตารางโซน CSV, แผนที่ KMZ, JSON, labels และ manifest ในไฟล์เดียว">รายงานครบชุด ZIP</a>
     <a class="btn" data-export="report.pdf">PDF</a>
     <a class="btn" data-export="report.docx">Word</a>
     <a class="btn" data-export="report.html">HTML</a>
@@ -187,6 +188,7 @@
         <label class="toggle"><input type="checkbox" id="s3Slice" checked> ระนาบตัดตามแนวสแกน</label>
         <label class="s3-depth">ระดับตัด <input type="range" id="s3Depth" min="0" max="5" step="0.01" value="1.5"> <output id="s3DepthValue">1.50 m</output></label>
         <button class="btn small" id="s3Png">บันทึก PNG</button>
+        <button class="btn small" id="s3Report" title="เก็บภาพมุมนี้ไว้พิมพ์ในรายงาน (ดู/ลบได้ในหน้าสรุปก่อนออกรายงาน)">ใส่ภาพนี้ในรายงาน</button>
         <button class="btn small" id="s3Json">ส่งออกฉาก JSON</button>
       </div>
       <p class="small muted" id="s3Datum"></p>
@@ -336,7 +338,8 @@
 <main id="summaryView" class="summary" hidden>
   <div class="actions left"><button class="btn" id="summaryBack">← กลับไปตรวจผล</button><span class="spacer"></span>
     <span class="muted small">ออกรายงาน:</span>
-    <a class="btn primary" data-export="report.pdf">PDF</a><a class="btn" data-export="report.docx">Word</a><a class="btn" data-export="report.html">HTML</a></div>
+    <a class="btn primary" data-package title="รายงาน PDF + Word, ตารางโซน CSV, แผนที่ KMZ, JSON, labels และ manifest ในไฟล์เดียว">รายงานครบชุด ZIP</a>
+    <a class="btn" data-export="report.pdf">PDF</a><a class="btn" data-export="report.docx">Word</a><a class="btn" data-export="report.html">HTML</a></div>
   <div id="summaryBody"></div>
 </main>
 

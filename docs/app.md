@@ -43,7 +43,8 @@ Review screen:
 - accept / edit (form or re-draw the box) / reject / reset, and drawing new zones the detector missed;
 - the processing recipe (every step, value and reason) and a form to override velocity, band, background,
   gain, AGC window, time-zero, migration for one line, then reprocess;
-- exports: report PDF / Word / HTML (draft banner until every zone is reviewed), zones CSV, survey JSON,
+- exports: one-click report package (see below), report PDF / Word / HTML (draft until the job is confirmed),
+  zones CSV, survey JSON,
   processed data per line as SEG-Y or CSV, and `labels.jsonl`.
 
 `labels.jsonl` (in the job folder) gets one record per decision: the automatic proposal, the zone before and
@@ -67,6 +68,25 @@ labels file).
   approved, default velocity, no GPS, missing job info, unfinished processing), job info, the zones that need
   action (levels E / 1 / 2) with distance, depth and coordinates, and a table per line; report buttons on the
   same page. All of these decisions go to `labels.jsonl`.
+
+## Confirmed report (one click)
+
+**รายงานครบชุด ZIP** (`/api/jobs/<id>/report-package`) writes one ZIP from the same records:
+`report.pdf`, `report.docx`, `zones.csv`, `zones.kmz` (Google Earth: tracks + zones), `survey.json`,
+`labels.jsonl` and `manifest.json` (SHA-256 of every file in the ZIP and of every input data file, status,
+reviewer, draft reasons).
+
+The report is **confirmed** only when every zone outside excluded sections is accepted, edited or rejected,
+every line is approved, processing finished without failed files, the data files are unchanged since they were
+processed, and a reviewer name is set. Otherwise it is a watermarked draft that lists the reasons on page 1
+(files named `DRAFT_report.*`, ZIP `report-package-DRAFT.zip`); the single PDF / Word / HTML exports use the
+same rule. Rejected zones are left out of the zone table, counts, map, KMZ and recommendations, and are listed
+with the reviewer's note in section 8 (review record), next to per-line decisions and input file hashes.
+
+The report also gets an overview map of the GPS tracks with zones coloured by action level (no basemap, so it
+works offline) and any images captured with **ใส่ภาพนี้ในรายงาน** in the 3D view (stored in
+`<job>/snapshots/`, listed and deletable on the summary page, printed with a note that the 3D view is built
+from measured 2D lines).
 
 ## Map (top view)
 
