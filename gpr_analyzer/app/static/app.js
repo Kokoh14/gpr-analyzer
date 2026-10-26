@@ -14,12 +14,15 @@ const ACT = { E: "E ฉุกเฉิน", 1: "1 เร่งด่วน", 2: 
 const REV = { auto: "ยังไม่ตรวจ", accepted: "ยอมรับแล้ว", edited: "แก้ไขแล้ว", rejected: "ปฏิเสธ" };
 const ART = { vertical_stripe: "แถบแนวตั้ง", bottom_noise: "noise ก้นภาพ", abnormal_trace: "trace ผิดปกติ", dead_trace: "trace ว่าง", stationary: "หยุดเดิน" };
 const STEP = { center_frequency: "ความถี่กลาง", dewow: "Dewow", time_zero: "Time-zero", bandpass: "Bandpass", background_removal: "Background removal",
-  gain: "Gain (SEC)", velocity: "ความเร็วคลื่น", migration: "Migration", envelope: "Envelope / energy", agc_display: "AGC (แสดงผล)" };
+  gain: "Gain (SEC)", velocity: "ความเร็วคลื่น", migration: "Migration", envelope: "Envelope / energy", agc_display: "AGC (แสดงผล)",
+  display_qc: "ตรวจ trace (แสดงผล)", display_bandpass: "Bandpass อัตโนมัติ (แสดงผล)", display_background: "ลบพื้นหลังอัตโนมัติ (แสดงผล)",
+  display_gain: "Gain อัตโนมัติ (แสดงผล)", display_contrast: "Contrast อัตโนมัติ (แสดงผล)" };
 const VIEWS = [
   ["grey", "ขาวดำ (รักษาแอมพลิจูด ใช้ให้คะแนน)", ""],
   ["high_gain", "Gain สูง (AGC ใช้ดูเท่านั้น)", "สี = ขั้วสัญญาณ แอมพลิจูดเทียบกันข้ามภาพไม่ได้"],
   ["envelope", "พลังงานสะท้อน (Hilbert envelope)", "สีแดง = สะท้อนแรง ไม่ได้แปลว่าเป็นโพรง"],
   ["viewpoint", "แบบหน้าจอ ViewPoint (ImpulseRadar)", "เลียนแบบภาพของ ViewPoint ใช้เทียบกับโปรแกรมของเครื่อง ใช้ดูเท่านั้น"],
+  ["autodisplay", "ฟิลเตอร์อัตโนมัติ (ใช้ดูเท่านั้น)", "โปรแกรมเลือก bandpass, ลบพื้นหลัง, gain และ contrast จากข้อมูลเส้นนี้เอง ดูค่าที่เลือกในตารางขั้นตอนประมวลผล gain เท่ากันทุก trace จึงเทียบความแรงตามแนวยาวได้"],
 ];
 const FAMILY = { iprh: "header", iprb: "data", rad: "header", rd3: "data", rd7: "data", hd: "header", dt1: "data", dzt: "data", sgy: "data", segy: "data" };
 const COMPANION = ["txt", "cor", "gps", "csv", "xml", "ini", "json", "log", "tmf", "mrk"];
@@ -205,7 +208,9 @@ async function runFolder() {
 const ESTATE = { waiting: "รอคิว", reading: "กำลังอ่าน", processing: "กำลังประมวลผล", saving: "กำลังบันทึก", done: "✓ เสร็จ", error: "✗ ผิดพลาด" };
 const STEP_TH = { read: "อ่านไฟล์", center_frequency: "หาความถี่", dewow: "Dewow", time_zero: "Time-zero", bandpass: "Bandpass",
   background_removal: "ลบพื้นหลัง", gain: "Gain", velocity: "หาความเร็วคลื่น", migration: "Migration", envelope: "Envelope",
-  agc: "AGC", viewpoint_display: "ภาพแบบ ViewPoint", detect: "ค้นหาโซนผิดปกติ", checkpoint: "บันทึก checkpoint" };
+  agc: "AGC", viewpoint_display: "ภาพแบบ ViewPoint", display_qc: "ตรวจ trace", display_bandpass: "Bandpass อัตโนมัติ",
+  display_background: "ลบพื้นหลังอัตโนมัติ", display_gain: "Gain อัตโนมัติ", display_contrast: "Contrast อัตโนมัติ",
+  detect: "ค้นหาโซนผิดปกติ", checkpoint: "บันทึก checkpoint" };
 function openProgress() {
   $("#uploadView").hidden = true; $("#reviewView").hidden = true; $("#progressView").hidden = false; $("#exports").hidden = true;
   history.replaceState(null, "", "#" + S.job.job_id);

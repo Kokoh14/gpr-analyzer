@@ -36,7 +36,7 @@ from gpr_analyzer.report.schema import (ACTION_LEVELS, CONFIDENCE_LEVELS, SURFAC
                                         Evidence, LineResult, ProcessingStep, SurveyInfo, SurveyResult, Zone)
 
 APP_VERSION = "0.1"
-VIEWS = ("grey", "high_gain", "envelope", "viewpoint")
+VIEWS = ("grey", "high_gain", "envelope", "viewpoint", "autodisplay")
 EDITABLE = ("trace_start", "trace_end", "time_top_ns", "time_bottom_ns", "suspected_type", "confidence", "action",
             "note")
 # Processing options the screen exposes; everything else stays automatic.
@@ -104,7 +104,7 @@ class LineState:
 
     # ------------------------------------------------------------------ processing
     def process(self, progress: Callable[[str], None] | None = None) -> None:
-        res = run_pipeline(self.raw, self.options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint"})
+        res = run_pipeline(self.raw, self.options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay"})
         if progress:
             progress("detect")
         det = analyze_line(res.analysis, velocity_m_per_ns=res.velocity_m_per_ns,
@@ -143,7 +143,7 @@ class LineState:
 
     # ------------------------------------------------------------------ images
     def views(self) -> list[str]:
-        return [v for v in VIEWS if v != "viewpoint" or self.result.viewpoint is not None]
+        return [v for v in VIEWS if v not in ("viewpoint", "autodisplay") or getattr(self.result, v) is not None]
 
     def positions(self) -> tuple[np.ndarray, np.ndarray] | None:
         """(lat, lon) per trace from the .cor GPS, or None."""
@@ -239,6 +239,10 @@ def render_png(res: ProcessingResult, view: str) -> bytes:
         if d.shape[0] < n:
             d = np.vstack([d, np.zeros((n - d.shape[0], d.shape[1]), dtype=d.dtype)])
         c = float(np.percentile(np.abs(d), 98.0)) or 1.0
+        img, cmap, lo, hi = d, "gray", -c, c
+    elif view == "autodisplay":
+        d = res.autodisplay.data
+        c = res.autodisplay.metadata["display_clip"]
         img, cmap, lo, hi = d, "gray", -c, c
     elif view == "high_gain":
         d = res.display.data
@@ -1078,7 +1082,9 @@ def _line_order(ln: LineState) -> tuple[int, str]:
 STEP_TH = {"read": "อ่านไฟล์", "center_frequency": "หาความถี่", "dewow": "Dewow", "time_zero": "Time-zero",
            "bandpass": "Bandpass", "background_removal": "ลบพื้นหลัง", "gain": "Gain", "velocity": "หาความเร็วคลื่น",
            "migration": "Migration", "envelope": "Envelope", "agc": "AGC", "viewpoint_display": "ภาพแบบ ViewPoint",
-           "detect": "ค้นหาโซนผิดปกติ", "checkpoint": "บันทึก checkpoint"}
+           "display_qc": "ตรวจ trace (แสดงผล)", "display_bandpass": "Bandpass อัตโนมัติ (แสดงผล)",
+           "display_background": "ลบพื้นหลังอัตโนมัติ (แสดงผล)", "display_gain": "Gain อัตโนมัติ (แสดงผล)",
+           "display_contrast": "Contrast อัตโนมัติ (แสดงผล)", "detect": "ค้นหาโซนผิดปกติ", "checkpoint": "บันทึก checkpoint"}
 TYPE_TH = {"void_like": "คล้ายโพรง", "pipe_point": "ท่อ/วัตถุจุด", "layer": "ชั้นดิน", "scattered": "สะท้อนกระจัดกระจาย",
            "artifact": "artifact", "unknown": "ไม่ระบุ"}
 CONF_TH = {"high": "สูง", "medium": "กลาง", "low": "ต่ำ", "confirmed": "ยืนยัน"}

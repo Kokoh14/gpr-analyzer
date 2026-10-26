@@ -44,7 +44,9 @@ def test_upload_review_labels_export(client, tmp_path):
     assert j["draft"] is True
     ln = j["lines"][0]
     assert ln["zones"], "demo line should give zones"
-    for v in ("grey", "high_gain", "envelope"):
+    assert "autodisplay" in ln["views"]
+    assert any(s["step"] == "display_bandpass" for s in ln["steps"])
+    for v in ("grey", "high_gain", "envelope", "autodisplay"):
         r = client.get(f"/api/jobs/{jid}/lines/L1/{v}.png")
         assert r.status_code == 200 and r.content[:4] == b"\x89PNG"
 
