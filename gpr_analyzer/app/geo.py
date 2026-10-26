@@ -110,19 +110,78 @@ def line_map(ln: Any) -> dict[str, Any]:
     return out
 
 
+def fix_quality(gps: list[dict[str, Any]] | None, traces: list[int]) -> list[str]:
+    """GPS fix quality (NMEA code as written in the .cor, e.g. "4" = RTK fixed) of the last fix at or before each trace."""
+    rows = sorted((r for r in gps or [] if isinstance(r.get("trace"), int)), key=lambda r: r["trace"])
+    if not rows:
+        return ["" for _ in traces]
+    tr = np.array([r["trace"] for r in rows])
+    return [str(rows[max(int(np.searchsorted(tr, t, side="right")) - 1, 0)].get("quality", "")) for t in traces]
+
+
+def gps_qa(gps: list[dict[str, Any]] | None, n_traces: int, dx_m: float | None) -> dict[str, Any]:
+    """Checks that tell whether a line's place on the map can be trusted, from the raw fixes only.
+
+    weak_fix: share of fixes that are not RTK fixed (quality 4). length_ratio: GPS path / wheel distance;
+    jitter in weak fixes makes the GPS path longer. start_gap_m / end_gap_m: distance along the wheel with no
+    fix at the start or end of the line (those traces are held at the first or last fix). max_jump: largest
+    move between two fixes per trace, in wheel trace spacings.
+    """
+    rows = sorted((r for r in gps or [] if r.get("lat") is not None and r.get("lon") is not None
+                   and (r["lat"], r["lon"]) != (0.0, 0.0)), key=lambda r: r["trace"])
+    out: dict[str, Any] = {"fixes": len(rows), "flags": []}
+    if len(rows) < 2:
+        return out
+    q = [str(r.get("quality", "")) for r in rows]
+    out["quality_counts"] = {k: q.count(k) for k in sorted(set(q))}
+    out["weak_fix_share"] = round(sum(1 for v in q if v and v != "4") / len(q), 2)
+    lat, lon = np.array([r["lat"] for r in rows]), np.array([r["lon"] for r in rows])
+    out["length_gps_m"] = round(path_length_m(lat, lon), 2)
+    out["first_fix_trace"], out["last_fix_trace"] = rows[0]["trace"], rows[-1]["trace"]
+    if out["weak_fix_share"] > 0:
+        out["flags"].append("weak_fix")
+    if dx_m:
+        wheel = n_traces * dx_m
+        out["length_wheel_m"] = round(wheel, 2)
+        out["length_ratio"] = round(out["length_gps_m"] / wheel, 2) if wheel else None
+        out["start_gap_m"] = round(max(rows[0]["trace"], 0) * dx_m, 2)
+        out["end_gap_m"] = round(max(n_traces - 1 - rows[-1]["trace"], 0) * dx_m, 2)
+        steps = [path_length_m(lat[i:i + 2], lon[i:i + 2]) / max(rows[i + 1]["trace"] - rows[i]["trace"], 1)
+                 for i in range(len(rows) - 1)]
+        out["max_jump"] = round(max(steps) / dx_m, 1)
+        if out["length_ratio"] and not 0.9 <= out["length_ratio"] <= 1.1:
+            out["flags"].append("length_mismatch")
+        if out["start_gap_m"] > 0.3 or out["end_gap_m"] > 0.3:
+            out["flags"].append("gap")
+        if out["max_jump"] > 5:
+            out["flags"].append("jump")
+    return out
+
+
 def job_overview(lines: list[Any]) -> list[dict[str, Any]]:
-    """Thin track of every line (about 200 points each) so the map can show the whole survey."""
+    """Thin track of every line (about 200 points each) so the map can show the whole survey.
+
+    Lines come in recording order (the time of the first GPS fix) with their number in that order, the GPS
+    quality at each point, and the gps_qa checks.
+    """
     out = []
     for ln in lines:
         a = ln.raw
-        pos = trace_positions(a.metadata.get("gps"), a.n_traces)
+        gps = a.metadata.get("gps")
+        pos = trace_positions(gps, a.n_traces)
         if pos is None:
             out.append({"line_id": ln.line_id, "source_file": ln.source_file, "has_gps": False})
             continue
         lat, lon = pos
         idx = sorted(set(np.linspace(0, a.n_traces - 1, min(a.n_traces, 200)).astype(int).tolist()))
-        out.append({"line_id": ln.line_id, "source_file": ln.source_file, "has_gps": True,
-                    "points": [[round(float(lat[i]), 7), round(float(lon[i]), 7)] for i in idx]})
+        first = min((r for r in gps if isinstance(r.get("trace"), int)), key=lambda r: r["trace"])
+        out.append({"line_id": ln.line_id, "source_file": ln.source_file, "has_gps": True, "n_traces": a.n_traces,
+                    "start_time": f"{first.get('date', '')} {first.get('time', '')}".strip(),
+                    "points": [[round(float(lat[i]), 7), round(float(lon[i]), 7)] for i in idx],
+                    "traces": idx, "quality": fix_quality(gps, idx), "qa": gps_qa(gps, a.n_traces, a.dx_m)})
+    timed = sorted((o for o in out if o["has_gps"]), key=lambda o: (o["start_time"] or "~", o["line_id"]))
+    for k, o in enumerate(timed, 1):
+        o["order"] = k
     return out
 
 
