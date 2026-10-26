@@ -29,8 +29,11 @@ class ZoneParams:
     artifact_margin_traces: int = 10
     time_zero_ns: float = 0.0
     layer_min_fraction: float = 0.5  # reflectors longer than this share of the line become their own zones
+    layer_min_m: float = 1e9  # … or longer than this
     limb_core_fraction: float = 0.25  # keep this share of a hyperbola's half-width; cut the limbs beyond
     max_layer_dip: float = 0.3  # samples per trace
+    max_zone_fraction: float = 0.5  # a local (non-layer) zone wider than this share of the line is split up
+    min_width_fresnel: float = 1.0  # zones without a hyperbola apex narrower than this × Fresnel radius are dropped
 
 
 def zone_id(i: int) -> str:
@@ -98,6 +101,8 @@ def find_zones(r: Radargram, artifacts: list[ArtifactFlag] | None = None,
     raw[:, artifact_mask(n_t, artifacts, p.close_traces)] = False
     raw = binary_opening(raw, structure=np.ones((max(1, per // 2), 2)))
     layer_len = max(p.close_traces + 1, int(p.layer_min_fraction * n_t))
+    if r.dx_m:  # on long lines a layer is long in metres well before it spans half the line
+        layer_len = min(layer_len, max(p.close_traces + 1, int(p.layer_min_m / r.dx_m)))
     layers = long_reflectors(raw, layer_len, p.max_layer_dip)
     rest = raw & ~layers & ~limb_mask(c, hyperbolas or [], r.dt_ns, r.dx_m, per, p)
     struct = np.ones((int(p.close_periods * per) | 1, p.close_traces))
@@ -113,21 +118,16 @@ def find_zones(r: Radargram, artifacts: list[ArtifactFlag] | None = None,
     for mask, is_layer in ((closed, False), (layers, True)):
         mask = mask & ~artifact_mask(n_t, artifacts, p.close_traces)[None, :]
         mask[:top] = False
-        lab, n = label(mask)
-        for k, sl in enumerate(find_objects(lab), 1):
-            if sl is None:
-                continue
-            s_sl, x_sl = sl
-            if x_sl.stop - x_sl.start < p.min_traces or s_sl.stop - s_sl.start < p.min_periods * per:
-                continue
-            comp = lab[sl] == k
-            boxes.append((x_sl.start, x_sl.stop - 1, s_sl.start, s_sl.stop - 1,
-                          float(np.max(np.where(comp, c[sl], 0.0))), is_layer))
-    boxes = merge_overlapping(boxes)
+        if not is_layer:
+            mask = split_wide(mask, c, p.contrast_threshold, int(p.max_zone_fraction * n_t), hyperbolas, r.dt_ns, per)
+        boxes += _boxes(mask, c, is_layer, p.min_traces, p.min_periods * per)
+    boxes = merge_overlapping(boxes, apexes=[(h.apex_trace, int(round(h.apex_time_ns / r.dt_ns)))
+                                             for h in hyperbolas or [] if not h.one_sided])
+    boxes = [b for b in boxes if b[5] or _wide_enough(b, r, v, per, hyperbolas or [], p)]
     boxes.sort(key=lambda b: (b[0], b[2]))
 
     zones = []
-    for i, (x0, x1, s0, s1, peak, _) in enumerate(boxes):
+    for i, (x0, x1, s0, s1, peak, is_layer) in enumerate(boxes):
         t0 = s0 * r.dt_ns - p.time_zero_ns
         t1 = s1 * r.dt_ns - p.time_zero_ns
         dx = r.dx_m
@@ -142,8 +142,90 @@ def find_zones(r: Radargram, artifacts: list[ArtifactFlag] | None = None,
             width_m=None if dx is None else (x1 - x0 + 1) * dx,
             thickness_m=float(depths[1] - depths[0]), peak_contrast=round(peak, 3))
         z.nearby_artifacts = [a.id for a in artifacts or [] if _near(a, z, p.artifact_margin_traces)]
+        if is_layer:
+            z.features["long_reflector"] = True  # traced as one straight reflector over ≥ layer length
         zones.append(z)
     return zones
+
+
+def _boxes(mask: np.ndarray, c: np.ndarray, is_layer: bool, min_traces: int, min_samples: float) -> list[tuple]:
+    lab, _ = label(mask)
+    out = []
+    for k, sl in enumerate(find_objects(lab), 1):
+        if sl is None:
+            continue
+        s_sl, x_sl = sl
+        if x_sl.stop - x_sl.start < min_traces or s_sl.stop - s_sl.start < min_samples:
+            continue
+        comp = lab[sl] == k
+        out.append((x_sl.start, x_sl.stop - 1, s_sl.start, s_sl.stop - 1,
+                    float(np.max(np.where(comp, c[sl], 0.0))), is_layer))
+    return out
+
+
+def split_wide(closed: np.ndarray, c: np.ndarray, threshold: float, max_traces: int,
+               hyperbolas: list[Hyperbola] | None = None, dt_ns: float = 1.0, per: int = 1) -> np.ndarray:
+    """Components that glue separate events together are cut back to their brighter parts.
+
+    Dense clutter (stony fill, roots) chains the limbs of many reflections into one network. A box
+    around it says nothing about where anything is. A component is split when it is wider than
+    max_traces, or when it holds two or more full hyperbola apexes at different times (two objects at
+    different depths; diffractions from the two edges of one cavity roof are at the same time). The
+    threshold is raised step by step inside it until no piece is like that; the weaker limbs that
+    joined them drop out, the bright cores stay.
+    """
+    apexes = [(h.apex_trace, int(round(h.apex_time_ns / dt_ns))) for h in hyperbolas or [] if not h.one_sided]
+
+    def too_big(piece_lab: np.ndarray, sl: tuple) -> bool:
+        for k, o in enumerate(find_objects(piece_lab), 1):
+            if o is None:
+                continue
+            if o[1].stop - o[1].start > max_traces:
+                return True
+            inside = [s for x, s in apexes if o[0].start <= s - sl[0].start < o[0].stop
+                      and o[1].start <= x - sl[1].start < o[1].stop and piece_lab[s - sl[0].start, x - sl[1].start] == k]
+            if len(inside) >= 2 and max(inside) - min(inside) > 2 * per:
+                return True
+        return False
+
+    lab, _ = label(closed)
+    out = closed
+    for k, sl in enumerate(find_objects(lab), 1):
+        if sl is None:
+            continue
+        comp = lab[sl] == k
+        if not too_big(np.where(comp, 1, 0), sl):
+            continue
+        if out is closed:
+            out = closed.copy()
+        piece = comp
+        for f in (1.5, 2, 3, 4, 6, 8, 12, 16):
+            piece = comp & binary_closing(c[sl] >= f * threshold, structure=np.ones((max(1, per) | 1, 3)))
+            if not too_big(label(piece)[0], sl):
+                break
+        out[sl] = np.where(comp, piece, out[sl])
+    return out
+
+
+def fresnel_radius_m(depth_m: float, wavelength_m: float) -> float:
+    """First Fresnel zone radius: the lateral resolution of a reflection at that depth."""
+    return float(np.sqrt(wavelength_m * max(depth_m, 0.0) / 2 + wavelength_m**2 / 16))
+
+
+def _wide_enough(b: tuple, r: Radargram, v: float, per: int, hyperbolas: list[Hyperbola], p: ZoneParams) -> bool:
+    """A reflection narrower than the Fresnel zone at its depth cannot come from a real interface or
+    object of its own; such specks are noise or bits of a larger event. Zones holding a hyperbola apex
+    are always kept."""
+    x0, x1, s0, s1 = b[:4]
+    if r.dx_m is None or p.min_width_fresnel <= 0:
+        return True
+    if any(x0 <= h.apex_trace <= x1 and s0 * r.dt_ns - per * r.dt_ns <= h.apex_time_ns <= s1 * r.dt_ns
+           for h in hyperbolas):
+        return True
+    t0 = max(s0 * r.dt_ns - p.time_zero_ns, 0.0)
+    depth = float(depth_from_time([t0], v, r.metadata.get("antenna_separation_m") or 0.0)[0])
+    wavelength = v * per * r.dt_ns
+    return (x1 - x0 + 1) * r.dx_m >= p.min_width_fresnel * fresnel_radius_m(depth, wavelength)
 
 
 def _row_runs_at_least(mask: np.ndarray, length: int) -> np.ndarray:
@@ -159,15 +241,21 @@ def _row_runs_at_least(mask: np.ndarray, length: int) -> np.ndarray:
     return out
 
 
-def long_reflectors(mask: np.ndarray, length: int, max_dip: float, n_slopes: int = 9) -> np.ndarray:
+def long_reflectors(mask: np.ndarray, length: int, max_dip: float, n_slopes: int | None = None) -> np.ndarray:
     """Pixels on straight reflectors at least `length` traces long, horizontal or gently dipping.
 
     The mask is sheared for each trial slope so a dipping line becomes a row, then horizontal
-    runs are measured. Cheaper than a morphological opening with long tilted lines.
+    runs are measured. Cheaper than a morphological opening with long tilted lines. By default the
+    slopes are spaced so that a reflector between two trial slopes drifts by at most about one row
+    over `length` traces (the ±1 row wobble allowed below); a coarser spacing misses dipping layers.
     """
     n_s, n_t = mask.shape
     out = np.zeros_like(mask)
     x = np.arange(n_t)
+    if n_slopes is None:
+        n_slopes = int(np.ceil(2 * max_dip * length / 1.5)) + 1
+    if not mask.any():
+        return out
     for slope in np.linspace(-max_dip, max_dip, n_slopes):
         shift = np.round(slope * (x - n_t / 2)).astype(int)
         rows = (np.arange(n_s)[:, None] + shift[None, :])  # sheared row index for each pixel
@@ -218,9 +306,29 @@ def limb_mask(c: np.ndarray, hyperbolas: list[Hyperbola], dt_ns: float, dx_m: fl
     return m
 
 
-def merge_overlapping(boxes: list[tuple]) -> list[tuple]:
+def _overlap_share(a: tuple, b: tuple) -> float:
+    """Overlap area of two boxes as a share of the smaller one."""
+    w = min(a[1], b[1]) - max(a[0], b[0]) + 1
+    h = min(a[3], b[3]) - max(a[2], b[2]) + 1
+    if w <= 0 or h <= 0:
+        return 0.0
+    area = min((a[1] - a[0] + 1) * (a[3] - a[2] + 1), (b[1] - b[0] + 1) * (b[3] - b[2] + 1))
+    return w * h / area
+
+
+def merge_overlapping(boxes: list[tuple], min_share: float = 0.3,
+                      apexes: list[tuple[int, int]] | None = None) -> list[tuple]:
     """Merge (x0, x1, s0, s1, peak, is_layer) boxes that overlap: one zone per area of the section.
+
+    Boxes holding a full hyperbola apex (trace, sample) merge only when they overlap by at least
+    min_share of the smaller box: in stony ground the boxes around crossing limbs touch each other
+    all along the line, and merging every touch would chain them into one box across the line.
     Long layers are only merged with each other, never with the local zones they cross."""
+    apexes = apexes or []
+
+    def has_apex(b: tuple) -> bool:
+        return any(b[0] <= x <= b[1] and b[2] <= s <= b[3] for x, s in apexes)
+
     boxes = list(boxes)
     changed = True
     while changed:
@@ -228,7 +336,8 @@ def merge_overlapping(boxes: list[tuple]) -> list[tuple]:
         out: list[tuple] = []
         for b in boxes:
             for i, o in enumerate(out):
-                if b[5] == o[5] and b[0] <= o[1] and o[0] <= b[1] and b[2] <= o[3] and o[2] <= b[3]:
+                share = _overlap_share(b, o)
+                if b[5] == o[5] and share > 0 and (share >= min_share or not (has_apex(b) or has_apex(o))):
                     out[i] = (min(b[0], o[0]), max(b[1], o[1]), min(b[2], o[2]), max(b[3], o[3]),
                               max(b[4], o[4]), b[5])
                     changed = True
@@ -242,5 +351,7 @@ def merge_overlapping(boxes: list[tuple]) -> list[tuple]:
 def _near(a: ArtifactFlag, z: Zone, margin: int) -> bool:
     if a.kind == "bottom_noise":
         return z.time_end_ns >= a.time_start_ns
+    if a.kind == "ringing":
+        return z.time_start_ns <= a.time_end_ns and a.time_start_ns <= z.time_end_ns
     m = max(margin, z.n_traces // 5)
     return a.overlaps_traces(z.trace_start, z.trace_end, m)

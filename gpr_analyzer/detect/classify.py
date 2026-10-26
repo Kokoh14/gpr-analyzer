@@ -47,6 +47,7 @@ class Context:
     hyperbolas: list[Hyperbola]
     artifacts: list[ArtifactFlag]
     dt_ns: float
+    limbs: np.ndarray | None = None  # pixels on the limbs of fitted hyperbolas, beyond their apex cores
 
 
 def E(status: str, code: str, th: str, en: str) -> Evidence:
@@ -67,6 +68,14 @@ def zone_features(z: Zone, ctx: Context, p: ClassifyParams) -> dict[str, Any]:
     lab, n = label(raw)
     sizes = np.bincount(lab.ravel())[1:] if n else np.array([])
     f["n_blobs"] = int(np.sum(sizes >= p.min_blob_px))
+    # the same, leaving out pixels on limbs of hyperbolas already found: crossing limbs of stones or
+    # pipes are not scattering of their own
+    f["n_blobs_on_limbs"] = 0
+    if ctx.limbs is not None and n:
+        own = raw & ~ctx.limbs[s0:s1 + 1, x0:x1 + 1]
+        lab2, n2 = label(own)
+        sizes2 = np.bincount(lab2.ravel())[1:] if n2 else np.array([])
+        f["n_blobs_on_limbs"] = max(0, f["n_blobs"] - int(np.sum(sizes2 >= p.min_blob_px)))
 
     # roof: first above-threshold sample on each trace
     has = raw.any(axis=0)
@@ -84,7 +93,9 @@ def zone_features(z: Zone, ctx: Context, p: ClassifyParams) -> dict[str, Any]:
         f["roof_resid_periods"] = float("inf")
         f["roof_slope_samples_per_trace"] = 0.0
         core = xs
-    f["continuous"] = f["roof_coverage"] >= 0.8 and f["roof_resid_periods"] <= 1.0
+    f["long_reflector"] = bool(z.features.get("long_reflector"))
+    # a traced long reflector is continuous by construction; its box may also hold crossing events
+    f["continuous"] = f["long_reflector"] or (f["roof_coverage"] >= 0.8 and f["roof_resid_periods"] <= 1.0)
     f["thin"] = f["n_samples"] <= 3 * per
     f["wide"] = z.n_traces >= max(30, n_t // 5)
     f["narrow_tall"] = z.n_traces <= 5 and (s1 - s0) >= 0.3 * n_s
@@ -127,6 +138,10 @@ def zone_features(z: Zone, ctx: Context, p: ClassifyParams) -> dict[str, Any]:
     if noise:
         on = noise[0].time_start_ns
         f["in_bottom_noise"] = float(np.clip((z.time_end_ns - on) / max(z.time_end_ns - z.time_start_ns, 1e-9), 0, 1))
+    ring = [a for a in ctx.artifacts if a.kind == "ringing"]
+    span = max(z.time_end_ns - z.time_start_ns, ctx.dt_ns)
+    f["in_ringing"] = float(max((max(0.0, min(a.time_end_ns, z.time_end_ns) - max(a.time_start_ns, z.time_start_ns))
+                                 for a in ring), default=0.0) / span)
     stat = [a for a in ctx.artifacts if a.kind == "stationary_traces"]
     f["stationary_overlap"] = float(sum(max(0, min(a.trace_end, x1) - max(a.trace_start, x0) + 1) for a in stat)
                                     / z.n_traces)
@@ -246,8 +261,8 @@ def assess_layer(f) -> TypeAssessment | None:
         return None
     if f["wide"] and f["thin"]:
         lvl = Confidence.HIGH if not f["n_apex_two_sided"] else Confidence.MEDIUM
-    elif f["wide"] or f["thin"]:
-        lvl = Confidence.MEDIUM
+    elif f["thin"] or (f["wide"] and f["long_reflector"]):
+        lvl = Confidence.MEDIUM  # a wide but thick box (e.g. a roof with ringing below) is not one reflector
     else:
         lvl = Confidence.LOW
     if f["full_line_flat"] and lvl == Confidence.HIGH:
@@ -283,11 +298,13 @@ def assess_void(f, surface_sign: int, p: ClassifyParams) -> TypeAssessment | Non
                 {"found": "deeper reflector pulled up beneath", "absent": "no pull-up of the deeper reflector",
                  "not_assessed": "no deeper reflector to check pull-up"}[pu]))
     specific = sum([reversal, f["edge_hyperbolas"], f["multiples"], pu == "found"])
+    # pull-up alone is not enough for medium: limbs of a pipe or stone crossing a deeper layer look the same
+    core_specific = specific - (pu == "found")
     if not (f["strong"] or specific):
         return None
     if reversal and specific >= 3:
         lvl = Confidence.HIGH
-    elif specific >= 1 and (specific + f["strong"] + f["bounded"]) >= 3:
+    elif core_specific >= 1 and (specific + f["strong"] + f["bounded"]) >= 3:
         lvl = Confidence.MEDIUM
     else:
         lvl = Confidence.LOW
@@ -297,15 +314,21 @@ def assess_void(f, surface_sign: int, p: ClassifyParams) -> TypeAssessment | Non
 
 
 def assess_scattered(f) -> TypeAssessment | None:
-    ev = [E(_yn(f["n_blobs"] >= 4), "many_reflectors", f"สะท้อนแรงไม่เป็นระเบียบ {f['n_blobs']} จุด",
-            f"{f['n_blobs']} irregular strong reflections"),
+    own = f["n_blobs"] - f.get("n_blobs_on_limbs", 0)  # blobs not explained by diffractions from elsewhere
+    ev = [E(_yn(own >= 4), "many_reflectors", f"สะท้อนแรงไม่เป็นระเบียบ {own} จุด",
+            f"{own} irregular strong reflections"),
           E(_yn(f["fill"] <= 0.35), "patchy", "กระจายเป็นหย่อม", "patchy"),
           E(_yn(not f["continuous"]), "not_continuous", "ไม่ต่อเนื่องเป็นแนว", "no continuous reflector")]
+    if f.get("n_blobs_on_limbs"):
+        ev.append(E("warning", "blobs_on_limbs",
+                    f"{f['n_blobs_on_limbs']} จุดอยู่บนขา hyperbola ของวัตถุจุดที่พบแล้ว ไม่นับเป็นการกระจัดกระจาย",
+                    f"{f['n_blobs_on_limbs']} spots lie on limbs of hyperbolas already found; "
+                    "not counted as scattering"))
     if f["n_blobs"] < 3 or f["continuous"]:
         return None
-    if f["n_blobs"] >= 6 and f["fill"] <= 0.35:
+    if own >= 6 and f["fill"] <= 0.35:
         lvl = Confidence.HIGH
-    elif f["n_blobs"] >= 4:
+    elif own >= 4:
         lvl = Confidence.MEDIUM
     else:
         lvl = Confidence.LOW
@@ -323,6 +346,10 @@ def assess_artifact(f) -> TypeAssessment | None:
         ev.append(E("found", "narrow_tall", "แคบไม่กี่ trace แต่สูงเกือบทั้งความลึก ลักษณะแถบแนวตั้ง",
                     "only a few traces wide but spans much of the depth: a vertical band"))
         lvl = lvl or Confidence.MEDIUM
+    if f["in_ringing"] >= 0.5 and not f["n_apex"]:
+        ev.append(E("found", "in_ringing", "อยู่ในแถบ ringing แนวนอน (จุดสว่างเล็ก ๆ เรียงตลอดเส้น)",
+                    "inside a horizontal ringing band (rows of small specks along the line)"))
+        lvl = lvl or Confidence.MEDIUM
     if f["stationary_overlap"] >= 0.5:
         ev.append(E("found", "stationary", "อยู่บน trace ที่หยุดเดิน", "on stationary (stopped) traces"))
         lvl = lvl or Confidence.MEDIUM
@@ -334,7 +361,11 @@ def artifact_warnings(z: Zone, ctx: Context) -> list[Evidence]:
     for a in ctx.artifacts:
         if a.id not in z.nearby_artifacts:
             continue
-        if a.kind == "bottom_noise":
+        if a.kind == "ringing":
+            out.append(E("warning", "ringing_near",
+                         f"โซนทับแถบ ringing แนวนอน {a.time_start_ns:.1f}–{a.time_end_ns:.1f} ns ({a.id})",
+                         f"zone overlaps the horizontal ringing band {a.time_start_ns:.1f}–{a.time_end_ns:.1f} ns ({a.id})"))
+        elif a.kind == "bottom_noise":
             out.append(E("warning", "bottom_noise_near",
                          f"ส่วนล่างของโซนถึงช่วง noise ก้นภาพ ({a.id}, ตั้งแต่ {a.time_start_ns:.0f} ns)",
                          f"zone reaches the bottom noise ({a.id}, from {a.time_start_ns:.0f} ns)"))
@@ -360,9 +391,10 @@ def classify_zone(z: Zone, ctx: Context, params: ClassifyParams | None = None) -
         z.evidence = [E("absent", "no_pattern", "ไม่เข้าลักษณะประเภทใดชัด", "matches no type clearly")] + warn
         z.alternatives = []
         return z
-    # same level: the type with more of its own signs found wins, then the more conservative type
-    cands.sort(key=lambda a: (a.confidence.rank, sum(e.status == "found" for e in a.evidence), PRIORITY[a.type]),
-               reverse=True)
+    # same level: artifact first, then the type with more of its own signs found, then the more conservative type
+    # an artifact verdict wins at its level: a pattern on stopped traces or in gained noise is not trusted
+    cands.sort(key=lambda a: (a.confidence.rank, a.type == ZoneType.ARTIFACT, sum(e.status == "found" for e in a.evidence),
+                              PRIORITY[a.type]), reverse=True)
     best = cands[0]
     z.suspected_type, z.confidence = best.type, best.confidence
     z.evidence = best.evidence + warn
