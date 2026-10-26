@@ -84,11 +84,11 @@ def radargram(s: Scene, seed: int):
 MAX_EXTRA_WIDTH_M = 2.0  # a zone more than this wider than the object it covers does not locate it
 
 
-def _hits(z: dict, items: list[tuple[float, float, float]], tol_x: float, tol_z: float) -> bool:
+def _hits(z: dict, items: list[tuple[float, float, float]], tol_x: float, tol_z: float, tight: bool = True) -> bool:
     """items: (x0_m, x1_m, depth_m) footprints. The zone must overlap the object, contain its top depth and
-    not be much wider than it."""
+    (tight) not be much wider than it."""
     return any(z["d0"] - tol_x <= x1 and x0 <= z["d1"] + tol_x and z["z0"] - tol_z <= d <= z["z1"] + tol_z
-               and z["d1"] - z["d0"] <= x1 - x0 + MAX_EXTRA_WIDTH_M for x0, x1, d in items)
+               and (not tight or z["d1"] - z["d0"] <= x1 - x0 + MAX_EXTRA_WIDTH_M) for x0, x1, d in items)
 
 
 def evaluate(n: int = 12, seed: int = 1, params=None) -> tuple[list[dict], dict]:
@@ -115,7 +115,8 @@ def evaluate(n: int = 12, seed: int = 1, params=None) -> tuple[list[dict], dict]
             rows.append({"scene": s.name, "zone": z.id, "type": z.suspected_type.value,
                          "confidence": z.confidence.value, "dist_m": round((z.distance_start_m + z.distance_end_m) / 2, 2),
                          "depth_m": round(z.depth_top_m, 2),
-                         "match": "target" if hit else ("clutter" if _hits(d, clutter, 0.15, 0.15) else "none"),
+                         "match": "target" if hit else "clutter" if _hits(d, clutter, 0.15, 0.15) else
+                                  "too_wide" if _hits(d, targets + clutter, 0.15, 0.15, tight=False) else "none",
                          "n_targets": len(targets), "found": len(found)})
         rows.append({"scene": s.name, "zone": "-", "type": "-", "confidence": "-", "dist_m": "", "depth_m": "",
                      "match": "summary", "n_targets": len(targets), "found": len(found)})
@@ -127,8 +128,8 @@ def summarise(rows: list[dict]) -> dict:
     zones = [r for r in rows if r["match"] != "summary"]
     for lvl in ("high", "medium", "low"):
         sel = [r for r in zones if r["confidence"] == lvl]
-        out[lvl] = {"zones": len(sel), "target": sum(r["match"] == "target" for r in sel),
-                    "clutter": sum(r["match"] == "clutter" for r in sel), "none": sum(r["match"] == "none" for r in sel)}
+        out[lvl] = {k: sum(r["match"] == k for r in sel) for k in ("target", "clutter", "too_wide", "none")}
+        out[lvl]["zones"] = len(sel)
     med_plus = [r for r in zones if r["confidence"] in ("high", "medium")]
     out["precision_medium_plus"] = (sum(r["match"] == "target" for r in med_plus) / len(med_plus)) if med_plus else None
     summ = [r for r in rows if r["match"] == "summary"]

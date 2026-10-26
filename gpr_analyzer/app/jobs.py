@@ -28,6 +28,7 @@ from gpr_analyzer.app import geo
 from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
 from gpr_analyzer.core import Radargram, crop_to_range
 from gpr_analyzer.detect import analyze_line, to_report_records
+from gpr_analyzer.detect import crossline
 from gpr_analyzer.io import read as read_file
 from gpr_analyzer.processing import ProcessingOptions, ProcessingResult, run_pipeline
 from gpr_analyzer.report import write_report
@@ -349,6 +350,7 @@ class Job:
         t0 = time.monotonic()
         for e in todo:
             self._process_entry(e)
+        self.apply_cross_line()
         with self.lock:
             self.progress.update(state="done", finished=_now())
             if not self.lines and not self.problems:
@@ -544,6 +546,7 @@ class Job:
         ln.options = opt
         ln.process()
         carried, dropped = carry_reviews(ln, old, old_auto)
+        self.apply_cross_line()
         if ln.status == "redo":
             ln.status = "pending"
         e = next((e for e in self.plan if ln.line_id in e["line_ids"]), None)
@@ -554,6 +557,49 @@ class Job:
         self._label("reprocess", ln, None, {"reviewed_zones_discarded": dropped},
                     {"options": options_dict(opt), "reviews_carried": carried})
         return ln
+
+    def apply_cross_line(self) -> int:
+        """Check unreviewed suspicious zones against the neighbouring lines (detect.crossline).
+
+        Adds one cross-line reason to each and lowers void-like / scattered / unknown zones by one level
+        when a neighbour passes over them without showing anything. Repeatable: the reason from an earlier
+        run is replaced and the level it changed is put back first. Reviewed zones are left as they are.
+        Returns the number of zones whose level changed.
+        """
+        with self.lock:
+            lines = list(self.lines)
+        pos = [(ln, ln.positions()) for ln in lines if ln.result is not None]
+        origin = next(((p[0][0], p[1][0]) for _, p in pos if p is not None), None)
+        tracks = []
+        for ln, p in pos:
+            a = ln.analysis
+            xy = crossline.local_xy(p[0], p[1], *origin) if p is not None else None
+            ok = xy is not None and crossline.gps_length_ok(xy, a.n_traces * (a.dx_m or 0) or None,
+                                                            crossline.CrossLineParams().max_length_mismatch)
+            ln.zones = [_without_cross_line(z) if z.review == "auto" else z for z in ln.zones]
+            tracks.append(crossline.LineTrack(
+                line_id=ln.line_id, source=ln.source_file, channel=ln.channel, xy=xy, dx_m=a.dx_m, gps_ok=ok,
+                zones=[z for z in ln.zones if z.review != "rejected" and not ln.excluded(z)],
+                excluded=[(sc["trace_start"], sc["trace_end"]) for sc in ln.sections]))
+        results = crossline.check_lines(tracks)
+        changed = 0
+        for ln, _ in pos:
+            new = []
+            for z in ln.zones:
+                r = results.get((ln.line_id, z.zone_id))
+                if r is not None and z.review == "auto":
+                    ev = {"kind": r.kind, "code": r.code, "text": r.text_th,
+                          "params": {"text_en": r.text_en, "base_confidence": z.confidence}}
+                    z = _replace(z, evidence=[e.__dict__ for e in z.evidence] + [ev],
+                                 confidence=r.new_confidence or z.confidence)
+                    changed += r.new_confidence is not None
+                    ln.auto_zones[z.zone_id] = z.to_dict()
+                new.append(z)
+            ln.zones = new
+            ln._cache.pop("report_figures", None)
+        if changed:
+            self.log(f"ตรวจข้ามแนวด้วย GPS: ลดระดับ {changed} โซนที่แนวข้างเคียงผ่านแต่ไม่พบ")
+        return changed
 
     # ------------------------------------------------------------------ line-level review
     def add_section(self, line_id: str, d: dict[str, Any]) -> dict[str, Any]:
@@ -1106,6 +1152,16 @@ def line_summary(ln: LineState) -> str:
 
 def _companion(p: Path) -> dict[str, Any]:
     return {"name": p.name, "size": p.stat().st_size, "text": preview_text(p)}
+
+
+def _without_cross_line(z: Zone) -> Zone:
+    """The zone as detect proposed it: an earlier cross-line reason removed, its level put back."""
+    old = [e for e in z.evidence if e.code.startswith("cross_line")]
+    if not old:
+        return z
+    base = old[0].params.get("base_confidence", z.confidence)
+    return _replace(z, evidence=[e.__dict__ for e in z.evidence if not e.code.startswith("cross_line")],
+                    confidence=base)
 
 
 def _replace(z: Zone, **changes: Any) -> Zone:

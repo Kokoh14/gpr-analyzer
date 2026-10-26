@@ -46,6 +46,10 @@ Review screen:
 - exports: report PDF / Word / HTML (draft banner until every zone is reviewed), zones CSV, survey JSON,
   processed data per line as SEG-Y or CSV, and `labels.jsonl`.
 
+After all lines are processed (and after a reprocess), unreviewed suspicious zones are checked against
+the neighbouring lines by GPS: each gets one cross-line reason, and a void-like / scattered zone that a
+neighbour passes over without showing is lowered by one level (see docs/detect.md, Cross-line check).
+
 `labels.jsonl` (in the job folder) gets one record per decision: the automatic proposal, the zone before and
 after, reviewer, processing options and velocity. This is the label set for later calibration / training.
 
