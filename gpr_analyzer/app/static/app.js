@@ -561,7 +561,7 @@ const BASEMAPS = {
 };
 // GPS fix quality as the NMEA code in the .cor file
 const GPSQ = { "4": ["RTK fixed", "#2f9e44"], "5": ["RTK float", "#f59f00"], "2": ["DGPS", "#e03131"], "1": ["GPS เดี่ยว", "#e03131"], "": ["ไม่ทราบ", "#adb5bd"] };
-const QAF = { weak_fix: "GPS ไม่ใช่ RTK fixed ทั้งเส้น", length_mismatch: "ระยะ GPS ไม่ตรงล้อวัดระยะ", gap: "ต้น/ท้ายเส้นไม่มี GPS", jump: "ตำแหน่งกระโดด" };
+const QAF = { weak_fix: "GPS ไม่ใช่ RTK fixed", length_mismatch: "ระยะ GPS ไม่ตรงล้อวัดระยะ", gap: "ต้น/ท้ายเส้นไม่มี GPS", jump: "ตำแหน่งกระโดด" };
 function qaText(q) {
   if (!q || !q.fixes) return "";
   const qs = Object.entries(q.quality_counts || {}).map(([k, v]) => `${(GPSQ[k] || [k])[0]} ${v}`).join(", ");
@@ -715,9 +715,12 @@ const M = {
     const bad = this.overview.filter((o) => o.has_gps && o.qa?.flags?.length);
     const none = this.overview.filter((o) => !o.has_gps);
     $("#mapQa").innerHTML = (bad.length || none.length)
-      ? `<b>ตรวจ GPS จากไฟล์ .cor:</b> ` + bad.map((o) => `<a href="#" data-goline="${esc(o.line_id)}" title="${esc(qaText(o.qa))}">${esc(o.line_id)}</a> ${o.qa.flags.map((f) => QAF[f]).join(", ")}`).join(" · ")
+      ? `<b>ตรวจ GPS จากไฟล์ .cor:</b> ` + bad.map((o) => `<a href="#" data-goline="${esc(o.line_id)}" title="${esc(qaText(o.qa))}">${esc(o.line_id)}</a> ${o.qa.flags.map((f) => f === "weak_fix" ? `${QAF[f]} ${Math.round(o.qa.weak_fix_share * 100)}% ของจุด` : QAF[f]).join(", ")}`).join(" · ")
         + (none.length ? ` · ไม่มี GPS: ${none.map((o) => esc(o.line_id)).join(", ")}` : "")
       : `<b>ตรวจ GPS จากไฟล์ .cor:</b> ทุกเส้น RTK fixed ระยะ GPS ตรงกับล้อวัดระยะ`;
+    if ($("#trackColour").value === "quality") $("#mapQa").innerHTML = "สีเส้น: " + ["4", "5", "1", ""].map((k) =>
+      `<span style="color:${GPSQ[k][1]}">━</span> ${k === "1" ? "GPS เดี่ยว/DGPS" : GPSQ[k][0]}`).join(" ") + "<br>" + $("#mapQa").innerHTML;
+    else if ($("#trackColour").value === "order") $("#mapQa").innerHTML = "สีเส้น: ลำดับเวลาเก็บ น้ำเงิน (เส้นแรก) → แดง (เส้นสุดท้าย) · จุดเขียว = ต้นเส้น<br>" + $("#mapQa").innerHTML;
   },
   fit() { if (this.data?.has_gps) this.map.fitBounds(this.data.points, { padding: [30, 30], maxZoom: 21 }); },
   drawSlice() {

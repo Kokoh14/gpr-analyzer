@@ -209,6 +209,8 @@
         <label>สี <select id="sliceCmap"><option value="jet">Jet</option><option value="hot">Hot</option><option value="grey">ขาวดำ</option></select></label>
         <label class="toggle"><input type="checkbox" id="mapZones" checked> โซน</label>
         <label class="toggle"><input type="checkbox" id="mapAll" checked> ทุกเส้น</label>
+        <label>สีเส้น <select id="trackColour"><option value="green">เขียว (แบบ ViewPoint)</option><option value="quality">คุณภาพ GPS</option><option value="order">ลำดับเวลาเก็บ</option></select></label>
+        <label class="toggle"><input type="checkbox" id="mapLabels" checked> เลขเส้น/ลูกศรทิศทาง</label>
         <button class="btn ghost small" id="mapFit" title="ซูมให้เห็นเส้นนี้ทั้งเส้น">⤢ พอดีเส้น</button>
       </div>
       <div class="mapwrap"><div id="map"></div><div class="map-msg" id="mapMsg" hidden></div>
@@ -216,6 +218,8 @@
           <input type="range" id="sliceDepth" min="0" max="39" value="6" aria-label="ความลึกจากผิวดิน"><b id="sliceDepthLbl"></b></div></div>
       <div class="map-legend small muted"><span id="sliceLegend"></span> <span id="mapHelp"></span>
         · คลิกบนแผนที่เพื่อไปยังตำแหน่งนั้นในภาพตัดขวาง · คลิกบนภาพตัดขวางเพื่อเลือกความลึก</div>
+      <div class="map-qa small" id="mapQa"></div>
+      <div class="map-coord small muted" id="mapCoord"></div>
     </details>
 
     <div class="zoombar">
