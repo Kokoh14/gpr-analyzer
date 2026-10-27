@@ -579,6 +579,15 @@ const BASEMAPS = {
     "ภาพดาวเทียม &copy; Esri, Maxar, Earthstar Geographics และ GIS User Community"],
   street: ["แผนที่ถนน", "https://tile.openstreetmap.org/{z}/{x}/{y}.png", "&copy; ผู้ร่วมพัฒนา <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"],
 };
+// GPS fix quality as the NMEA code in the .cor file
+const GPSQ = { "4": ["RTK fixed", "#2f9e44"], "5": ["RTK float", "#f59f00"], "2": ["DGPS", "#e03131"], "1": ["GPS เดี่ยว", "#e03131"], "": ["ไม่ทราบ", "#adb5bd"] };
+const QAF = { weak_fix: "GPS ไม่ใช่ RTK fixed", length_mismatch: "ระยะ GPS ไม่ตรงล้อวัดระยะ", gap: "ต้น/ท้ายเส้นไม่มี GPS", jump: "ตำแหน่งกระโดด" };
+function qaText(q) {
+  if (!q || !q.fixes) return "";
+  const qs = Object.entries(q.quality_counts || {}).map(([k, v]) => `${(GPSQ[k] || [k])[0]} ${v}`).join(", ");
+  return `GPS ${q.fixes} จุด (${qs}) · ยาวตาม GPS ${fmt(q.length_gps_m, 1)} m` + (q.length_wheel_m ? ` / ล้อ ${fmt(q.length_wheel_m, 1)} m` : "")
+    + (q.start_gap_m > 0.3 ? ` · ต้นเส้น ${fmt(q.start_gap_m, 1)} m ไม่มี GPS` : "") + (q.end_gap_m > 0.3 ? ` · ท้ายเส้น ${fmt(q.end_gap_m, 1)} m ไม่มี GPS` : "");
+}
 function cmap(name, f) {  // f in 0..1 -> css colour
   f = Math.min(Math.max(f, 0), 1);
   if (name === "grey") { const g = Math.round(30 + 225 * f); return `rgb(${g},${g},${g})`; }
@@ -605,6 +614,9 @@ const M = {
     this.map.on("baselayerchange", (e) => { keep("basemap", e.name); this.setOffline(false); });
     for (const k of ["all", "slice", "diel", "zones", "marks", "hover"]) this.layers[k] = L.layerGroup().addTo(this.map);
     this.map.setView([13.7563, 100.5018], 5);
+    this.map.on("mousemove", (e) => { $("#mapCoord").textContent = `${e.latlng.lat.toFixed(7)}, ${e.latlng.lng.toFixed(7)}`; });
+    this.map.on("mouseout", () => { $("#mapCoord").textContent = ""; });
+    $("#trackColour").value = store("trackColour", "green"); $("#mapLabels").checked = store("mapLabels", "1") === "1";
     $("#sliceDepth").value = store("sliceDepth", 6); $("#sliceThr").value = store("sliceThr", -40);
     $("#sliceCmap").value = store("sliceCmap", "jet"); $("#mapMode").value = store("mapMode", "energy");
     return true;
@@ -649,12 +661,12 @@ const M = {
   draw(fit) {
     const ly = this.layers;
     ly.all.clearLayers(); ly.marks.clearLayers(); ly.hover.clearLayers();
+    this.drawMarks();
+    this.drawQa();
     if ($("#mapAll").checked || !this.data?.has_gps) for (const o of this.overview) {
-      if (!o.has_gps || o.line_id === S.line) continue;
-      L.polyline(o.points, { color: "#fff", weight: 4, opacity: 0.9 }).addTo(ly.all);
-      L.polyline(o.points, { color: "#1f6feb", weight: 2 }).addTo(ly.all)
-        .bindTooltip(`${esc(o.line_id)} · ${esc(o.source_file)} (คลิกเพื่อเปิด)`, { sticky: true })
-        .on("click", () => switchLine(o.line_id));
+      if (!o.has_gps) continue;
+      if (o.line_id !== S.line) this.drawTrack(o);
+      this.drawTrackLabel(o);
     }
     const d = this.data;
     $("#mapMsg").hidden = !!d?.has_gps;
@@ -668,12 +680,67 @@ const M = {
     const [s, e] = d.ends;
     L.circleMarker(s, { radius: 5, color: "#fff", fillColor: "#2f9e44", fillOpacity: 1, weight: 2 }).addTo(ly.marks).bindTooltip(`${S.line} เริ่ม (trace 0)`);
     L.circleMarker(e, { radius: 5, color: "#fff", fillColor: "#c92a2a", fillOpacity: 1, weight: 2 }).addTo(ly.marks).bindTooltip(`${S.line} จบ (trace ${d.n_traces - 1})`);
-    for (const m of d.markers) L.circleMarker([m.lat, m.lon], { radius: 4, color: "#000", fillColor: "#ffd43b", fillOpacity: 1, weight: 1 })
-      .addTo(ly.marks).bindTooltip(`มาร์กเกอร์ trace ${m.trace}${m.type ? " · " + esc(m.type) : ""}`);
     $("#mapNote").textContent = this.offline ? $("#mapNote").textContent
       : `(GPS ${d.gps_fixes} จุด · ยาวตาม GPS ${fmt(d.length_gps_m, 1)} m${d.length_wheel_m ? ` · ตามล้อวัดระยะ ${fmt(d.length_wheel_m, 1)} m` : ""})`;
     this.drawSlice(); this.drawZones();
     if (fit) this.fit();
+  },
+  // Markers as Google Earth shows ViewPoint's KML: field marks from the .mrk files (filled, colour standard of
+  // the mark) and the markers of an imported answer-key KML ("เฉลย", rings). Click for the same balloon text.
+  async drawMarks() {
+    if (!this.layers.vp) this.layers.vp = L.layerGroup().addTo(this.map);
+    if (this.marksFor !== S.job) {
+      try { this.marks = await api(jobUrl("/marks.json")); } catch (e) { this.marks = { field: [], reference: [] }; }
+      this.marksFor = S.job;
+    }
+    const ly = this.layers.vp; ly.clearLayers();
+    const pop = (m, what) => `<b>${esc(m.name)}</b> <span class="muted">${what}</span><br>${esc(m.profile)}<br>`
+      + `Type: ${esc(m.type || "–")}<br>Information: ${esc(m.information || "–")}<br>Target depth: ${m.depth_m == null ? "–" : m.depth_m.toFixed(2) + " m"}`;
+    for (const m of this.marks.reference) L.circleMarker([m.lat, m.lon], { radius: 10, color: m.colour, weight: 3, fill: false })
+      .addTo(ly).bindPopup(pop(m, "เฉลย KML")).bindTooltip(`เฉลย ${esc(m.name)} · ลึก ${fmt(m.depth_m)} m`);
+    for (const m of this.marks.field) L.circleMarker([m.lat, m.lon], { radius: 6, color: "#000", weight: 1, fillColor: m.colour, fillOpacity: 1 })
+      .addTo(ly).bindPopup(pop(m, "จุดมาร์กภาคสนาม (.mrk)")).bindTooltip(`${esc(m.name)} · ลึก ${fmt(m.depth_m)} m (คลิกดูรายละเอียด)`);
+  },
+  // Other lines: ViewPoint's green, or coloured by GPS fix quality / recording order; a dot at trace 0 and an
+  // arrow in the walking direction, so the order and direction of every line can be checked against the field notes.
+  drawTrack(o) {
+    const ly = this.layers.all, by = $("#trackColour").value, n = this.overview.filter((v) => v.has_gps).length;
+    const tip = `<b>${esc(o.line_id)}</b> · เส้นที่ ${o.order} ตามเวลาเก็บ · ${esc(o.start_time)} UTC<br>${esc(o.source_file)}<br>${qaText(o.qa)}<br>(คลิกเพื่อเปิด)`;
+    if (by === "quality") {  // one piece per run of the same fix quality
+      for (let k = 0; k < o.points.length - 1;) {
+        let j = k + 1;
+        while (j < o.points.length - 1 && o.quality[j] === o.quality[k]) j++;
+        L.polyline(o.points.slice(k, j + 1), { color: (GPSQ[o.quality[k]] || GPSQ[""])[1], weight: 4, opacity: 0.95 }).addTo(ly)
+          .bindTooltip(tip, { sticky: true }).on("click", () => switchLine(o.line_id));
+        k = j;
+      }
+    } else {
+      const col = by === "order" ? cmap("jet", n > 1 ? (o.order - 1) / (n - 1) : 0) : "#00ff00";  // ViewPoint's "greenTrack"
+      L.polyline(o.points, { color: col, weight: 4, opacity: 0.9 }).addTo(ly)
+        .bindTooltip(tip, { sticky: true }).on("click", () => switchLine(o.line_id));
+    }
+    L.circleMarker(o.points[0], { radius: 3, color: "#fff", weight: 1, fillColor: "#2f9e44", fillOpacity: 1, interactive: false }).addTo(ly);
+  },
+  drawTrackLabel(o) {
+    if (!$("#mapLabels").checked || o.points.length < 2) return;
+    const p = o.points, m = Math.floor(p.length / 2), a = p[Math.max(m - 3, 0)], b = p[Math.min(m + 3, p.length - 1)];
+    const deg = Math.atan2((b[1] - a[1]) * Math.cos(a[0] * Math.PI / 180), b[0] - a[0]) * 180 / Math.PI;  // bearing, 0 = north
+    const sel = o.line_id === S.line, warn = o.qa?.flags?.length ? " warn" : "";
+    L.marker(p[m], { interactive: false, icon: L.divIcon({ className: "tarrow", iconSize: [16, 16],
+      html: `<span style="transform:rotate(${deg - 90}deg)">➤</span>` }) }).addTo(this.layers.all);
+    L.marker(p[0], { interactive: false, icon: L.divIcon({ className: `tlabel${sel ? " sel" : ""}${warn}`, iconSize: null,
+      html: esc(o.line_id.replace(/^.*?_?0*(\d+)$/, "$1")) }) }).addTo(this.layers.all);
+  },
+  drawQa() {  // lines whose position needs care, from the raw .cor fixes
+    const bad = this.overview.filter((o) => o.has_gps && o.qa?.flags?.length);
+    const none = this.overview.filter((o) => !o.has_gps);
+    $("#mapQa").innerHTML = (bad.length || none.length)
+      ? `<b>ตรวจ GPS จากไฟล์ .cor:</b> ` + bad.map((o) => `<a href="#" data-goline="${esc(o.line_id)}" title="${esc(qaText(o.qa))}">${esc(o.line_id)}</a> ${o.qa.flags.map((f) => f === "weak_fix" ? `${QAF[f]} ${Math.round(o.qa.weak_fix_share * 100)}% ของจุด` : QAF[f]).join(", ")}`).join(" · ")
+        + (none.length ? ` · ไม่มี GPS: ${none.map((o) => esc(o.line_id)).join(", ")}` : "")
+      : `<b>ตรวจ GPS จากไฟล์ .cor:</b> ทุกเส้น RTK fixed ระยะ GPS ตรงกับล้อวัดระยะ`;
+    if ($("#trackColour").value === "quality") $("#mapQa").innerHTML = "สีเส้น: " + ["4", "5", "1", ""].map((k) =>
+      `<span style="color:${GPSQ[k][1]}">━</span> ${k === "1" ? "GPS เดี่ยว/DGPS" : GPSQ[k][0]}`).join(" ") + "<br>" + $("#mapQa").innerHTML;
+    else if ($("#trackColour").value === "order") $("#mapQa").innerHTML = "สีเส้น: ลำดับเวลาเก็บ น้ำเงิน (เส้นแรก) → แดง (เส้นสุดท้าย) · จุดเขียว = ต้นเส้น<br>" + $("#mapQa").innerHTML;
   },
   fit() { if (this.data?.has_gps) this.map.fitBounds(this.data.points, { padding: [30, 30], maxZoom: 21 }); },
   drawSlice() {
@@ -1145,6 +1212,8 @@ $("#showRejected").addEventListener("change", () => { refreshOverlays(); M.drawZ
 for (const id of ["#sliceDepth", "#sliceThr", "#sliceCmap", "#mapMode"]) $(id).addEventListener("input", () => M.drawSlice());
 $("#mapZones").addEventListener("change", () => M.drawZones());
 $("#mapAll").addEventListener("change", () => M.draw(false));
+$("#trackColour").addEventListener("change", (e) => { keep("trackColour", e.target.value); M.draw(false); });
+$("#mapLabels").addEventListener("change", (e) => { keep("mapLabels", e.target.checked ? "1" : "0"); M.draw(false); });
 $("#mapFit").addEventListener("click", (e) => { e.preventDefault(); M.fit(); });
 $("#mapCard").addEventListener("toggle", () => { if ($("#mapCard").open) setTimeout(() => M.map?.invalidateSize(), 50); drawGuides(); });
 $("#showRef").addEventListener("change", refreshOverlays);
@@ -1164,6 +1233,18 @@ $("#refCsvInput").addEventListener("change", async (e) => {
     S.job = j; render();
     const r = j.import_result;
     toast(`นำเข้า ${r.added} จุด` + (r.warnings.length ? ` (ข้าม ${r.warnings.length} แถว)` : ""));
+  } catch (err) { toast("นำเข้าไม่ได้: " + err.message); }
+});
+$("#refKmlBtn").addEventListener("click", () => $("#refKmlInput").click());
+$("#refKmlInput").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  try {
+    const j = await upload(jobUrl("/ref/kml"), [f], { fileField: "file" });
+    S.job = j; render(); M.load();
+    const r = j.import_result;
+    toast(`เฉลย KML: ${r.profiles} เส้น ${r.marks} จุดมาร์ก · เป็นจุดอ้างอิงบนเส้นของงานนี้ ${r.added} จุด`
+      + (r.profiles_not_in_job.length ? ` · ${r.profiles_not_in_job.length} เส้นในไฟล์ไม่อยู่ในงานนี้` : ""));
   } catch (err) { toast("นำเข้าไม่ได้: " + err.message); }
 });
 $("#featAdd").addEventListener("click", () => { S.job.comparison.features = [...featureValues(), { feature: "", source: $("#refSource").value || "viewpoint", rating: "untested", note: "" }]; renderFeatures(); });

@@ -104,6 +104,12 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--bg
 .map-msg { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 500; background: var(--panel);
   border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font-size: 13px; }
 .map-legend { margin-top: 4px; line-height: 1.6; }
+.map-qa { margin-top: 4px; line-height: 1.6; } .map-coord { min-height: 1.4em; font-variant-numeric: tabular-nums; }
+.tlabel { background: rgba(255,255,255,.9); color: #111; border: 1px solid #333; border-radius: 3px; padding: 0 3px;
+  font: 600 11px/14px system-ui, sans-serif; white-space: nowrap; transform: translate(-50%, -130%); width: max-content; }
+.tlabel.sel { background: #ffd43b; } .tlabel.warn { border-color: #e03131; color: #c92a2a; }
+.tarrow { color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000; font-size: 13px; line-height: 16px; text-align: center; }
+.tarrow span { display: inline-block; }
 .zlabel { font: 700 11px system-ui, sans-serif; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap;
   transform: translate(-50%, -150%); }
 .leaflet-container { font: inherit; }

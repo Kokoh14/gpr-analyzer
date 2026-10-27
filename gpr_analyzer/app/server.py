@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gpr_analyzer.app import folders, geo, scene3d
+from gpr_analyzer.app import folders, geo, kml, scene3d
 from gpr_analyzer.app.files import safe_name
 from gpr_analyzer.app.compare import TEMPLATE_CSV
 from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
@@ -23,6 +23,7 @@ MEDIA = {".pdf": "application/pdf", ".html": "text/html; charset=utf-8", ".csv":
          ".cnf": "text/plain; charset=utf-8", ".pobj": "text/plain; charset=utf-8",
          ".lobj": "text/plain; charset=utf-8", ".zip": "application/zip",
          ".json": "application/json", ".sgy": "application/octet-stream",
+         ".kml": "application/vnd.google-earth.kml+xml", ".kmz": "application/vnd.google-earth.kmz",
          ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 
 
@@ -314,6 +315,16 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
     def import_picks(job_id: str, line_id: str, file: UploadFile = File(...), source: str = Form("other"),
                      replace: bool = Form(False)) -> dict:
         return ref_route(job_id, Job.import_ref_csv, line_id, file.file.read(), source, replace)
+
+    @app.post("/api/jobs/{job_id}/ref/kml")
+    def import_kml(job_id: str, file: UploadFile = File(...)) -> dict:
+        return ref_route(job_id, Job.import_ref_kml, file.file.read())
+
+    @app.get("/api/jobs/{job_id}/marks.json")
+    def job_marks(job_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            return kml.map_marks(j.lines, j.comparison.get("kml"))
 
     @app.post("/api/jobs/{job_id}/lines/{line_id}/ref/meta/{source}")
     def ref_meta(job_id: str, line_id: str, source: str, body: dict = Body(...)) -> dict:
