@@ -67,3 +67,27 @@ clipped by a strong metallic target.
 Earlier screenshots discussed in the project (555 traces, 0–145 ns, ~9.5 m, 0.135 m/ns) do not
 come from this survey: here each line has 1100 samples, 0–107 ns (800 MHz) or 0–215 ns (400 MHz),
 and ViewPoint used 0.1 m/ns. Those numbers still need their own raw files to check.
+
+## Google Earth export (KML / KMZ)
+
+ViewPoint's `Export/<project>.kml` (and the `.kmz` beside the data) is rebuilt from the raw files
+alone, byte for byte, by `app/kml.py` (`tests/test_kml.py`, real-data test with `GPR_REAL_DATA`):
+
+| Item | ViewPoint behaviour |
+|---|---|
+| Track | one green `LineString` per profile, vertices = the `.cor` GPS fixes as written, `lon,lat,0` |
+| Markers | the `_0` channel's `.mrk`, one `Point` each, named `Mark: <line no.>.<k>`, at the `.mrk` position |
+| Colour | `#<standard>:<index>` (APWA, AS5488, JUPEM), index = the `.mrk` status column (`APWA:2` = red) |
+| Target depth | at the marker's sample with the bistatic depth above, **cut** to the centimetre (rounding puts 2 of 6 markers 1 cm deeper) |
+| Status | the `.mrk` GPS quality (4 = RTK fixed) |
+| Layout | all 25 styles always, CRLF lines, LF between coordinates, no newline after `</kml>` |
+
+The export in this survey was written at 21:49, before lines 60–78 were measured and before the markers
+on lines 3, 4, 5, 6 and 9 were added, so it holds 59 profiles and 6 markers; the raw folder now has
+78 lines and 17 markers. The raw files are the reference, the KML a cross-check.
+
+The app's **KMZ / KML** export writes the same file from the job, with our zones added in a separate
+`GPR Analyzer zones` folder per profile (APWA pink, the program does not know what a utility carries),
+and our own radargram snapshots in `AutoScreenShots/`. **นำเข้าเฉลย KML/KMZ** turns the markers of such a
+file into reference picks on every channel of the same profile; a marker that is also in the line's
+`.mrk` gets the `.mrk` trace, others the trace nearest its position.
