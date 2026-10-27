@@ -18,7 +18,7 @@ from gpr_analyzer.report.schema import (ArtifactRegion, Evidence, LineResult, Pr
 __all__ = ["write_report", "compose", "Report", "SurveyResult", "SurveyInfo", "LineResult", "Zone",
            "Evidence", "ProcessingStep", "ArtifactRegion", "FORMATS"]
 
-FORMATS = (".pdf", ".docx", ".html", ".json", ".csv")
+FORMATS = (".pdf", ".docx", ".html", ".json", ".csv", ".cnf", ".pobj", ".lobj")
 
 
 def write_report(survey: SurveyResult, path: str | os.PathLike, lang: str = "bi") -> Path:
@@ -27,7 +27,10 @@ def write_report(survey: SurveyResult, path: str | os.PathLike, lang: str = "bi"
     ext = path.suffix.lower()
     if ext not in FORMATS:
         raise ValueError(f"unsupported report format {ext!r}; use one of {FORMATS}")
-    if ext == ".json":
+    if ext in (".cnf", ".pobj", ".lobj"):
+        from gpr_analyzer.report.exports import zones_condor
+        path.write_text(zones_condor(survey)[ext[1:]], encoding="utf-8", newline="")
+    elif ext == ".json":
         from gpr_analyzer.report.exports import survey_json
         survey_json(survey, path)
     elif ext == ".csv":
