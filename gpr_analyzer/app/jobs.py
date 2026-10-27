@@ -11,11 +11,16 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import multiprocessing
+import os
 import pickle
+import queue
 import threading
 import time
 import uuid
 from collections import OrderedDict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,13 +111,14 @@ class LineState:
     revision: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     # ------------------------------------------------------------------ processing
-    def process(self, progress: Callable[[str], None] | None = None) -> None:
-        res = run_pipeline(self.raw, self.options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay"})
-        if progress:
-            progress("detect")
-        det = analyze_line(res.analysis, velocity_m_per_ns=res.velocity_m_per_ns,
-                           velocity_source=res.velocity_source_code)
-        zones, regions = to_report_records(det, line_id=self.line_id)
+    def process(self, progress: Callable[[str], None] | None = None, pool: "LinePool | None" = None) -> None:
+        out = None
+        if pool is not None:
+            try:
+                out = pool.run(self.raw, self.options, self.line_id, progress)
+            except BrokenProcessPool:  # a worker died (e.g. out of memory): do this line here instead
+                out = None
+        res, zones, regions = out or process_line(self.raw, self.options, self.line_id, progress)
         self.result = res
         off = self.offset_m
         self.zones = [Zone.from_dict({**z, **({"distance_start_m": z["distance_start_m"] + off,
@@ -232,6 +238,57 @@ class LineState:
         }
 
 
+def process_line(raw: Radargram, options: ProcessingOptions, line_id: str,
+                 progress: Callable[[str], None] | None = None) -> tuple[ProcessingResult, list[dict], list[dict]]:
+    """Processing tracks and automatic zones of one line. Module level so a worker process can run it."""
+    res = run_pipeline(raw, options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay"})
+    if progress:
+        progress("detect")
+    det = analyze_line(res.analysis, velocity_m_per_ns=res.velocity_m_per_ns,
+                       velocity_source=res.velocity_source_code)
+    zones, regions = to_report_records(det, line_id=line_id)
+    return res, zones, regions
+
+
+def _process_line_in_worker(raw: Radargram, options: ProcessingOptions, line_id: str,
+                            steps: Any) -> tuple[ProcessingResult, list[dict], list[dict]]:
+    return process_line(raw, options, line_id, steps.put)
+
+
+def line_workers(n_lines: int) -> int:
+    """Lines processed at the same time: one per spare CPU core, at most 4 (each takes a few hundred MB)."""
+    return max(1, min(n_lines, 4, (os.cpu_count() or 1) - 1))
+
+
+class LinePool:
+    """Worker processes for whole lines. Each line gives the same result as process_line in this process;
+    only the wall time changes. Steps come back through a queue so the progress table still shows them."""
+
+    def __init__(self, workers: int) -> None:
+        ctx = multiprocessing.get_context("spawn")  # same on Windows and Linux; fork is unsafe with threads
+        self._manager = ctx.Manager()
+        self._pool = ProcessPoolExecutor(workers, mp_context=ctx)
+
+    def run(self, raw: Radargram, options: ProcessingOptions, line_id: str,
+            progress: Callable[[str], None] | None) -> tuple[ProcessingResult, list[dict], list[dict]]:
+        steps = self._manager.Queue()
+        fut = self._pool.submit(_process_line_in_worker, raw, options, line_id, steps)
+        while True:
+            try:
+                step = steps.get(timeout=0.2)
+            except queue.Empty:
+                if fut.done():
+                    break
+                continue
+            if progress:
+                progress(step)
+        return fut.result()
+
+    def close(self) -> None:
+        self._pool.shutdown()
+        self._manager.shutdown()
+
+
 def review_counts(zones: list[Zone]) -> dict[str, int]:
     out = {"auto": 0, "accepted": 0, "edited": 0, "rejected": 0}
     for z in zones:
@@ -272,7 +329,9 @@ def render_png(res: ProcessingResult, view: str) -> bytes:
         img = 20.0 * np.log10(np.maximum(env / ref, 10 ** (-30.0 / 20.0)))
         cmap, lo, hi = "turbo", -30.0, 0.0
     buf = io.BytesIO()
-    imsave(buf, np.asarray(img, dtype=np.float64), cmap=colormaps[cmap], vmin=lo, vmax=hi, format="png")
+    # zlib level 3: same pixels, about 3x faster to write than the default level for ~15% more bytes
+    imsave(buf, np.asarray(img, dtype=np.float64), cmap=colormaps[cmap], vmin=lo, vmax=hi, format="png",
+           pil_kwargs={"compress_level": 3})
     return buf.getvalue()
 
 
@@ -362,6 +421,7 @@ class Job:
         self._thread.start()
 
     def run_plan(self) -> None:
+        """Process the plan. Call it without holding self.lock: the threads that process lines take it."""
         todo = [e for e in self.plan if e["state"] != "done"]
         resumed = len(todo) < len(self.plan)
         with self.lock:
@@ -370,8 +430,22 @@ class Job:
         self.log(("ทำต่อ: เหลือ " if resumed else "เริ่มประมวลผล ") + f"{len(todo)} จาก {len(self.plan)} ไฟล์"
                  + (f" (อ่านจากโฟลเดอร์ {self.source_folder})" if self.source_folder else ""))
         t0 = time.monotonic()
-        for e in todo:
-            self._process_entry(e)
+        pool = None
+        workers = line_workers(len(todo))
+        if workers > 1:
+            try:
+                pool = LinePool(workers)
+            except Exception as ex:  # noqa: BLE001 - e.g. a script without a __main__ guard: do the lines one by one
+                self.log(f"ประมวลผลทีละเส้น (เปิดหลายเส้นพร้อมกันไม่ได้: {type(ex).__name__})")
+        if pool is not None:
+            try:
+                with ThreadPoolExecutor(workers) as threads:
+                    list(threads.map(lambda e: self._process_entry(e, pool), todo))
+            finally:
+                pool.close()
+        else:
+            for e in todo:
+                self._process_entry(e)
         self.apply_cross_line()
         with self.lock:
             self.progress.update(state="done", finished=_now())
@@ -386,7 +460,7 @@ class Job:
         e["step"] = step
         e["steps_done"] = e.get("steps_done", 0) + 1
 
-    def _process_entry(self, e: dict[str, Any]) -> None:
+    def _process_entry(self, e: dict[str, Any], pool: LinePool | None = None) -> None:
         primary = Path(e["primary"])
         e.update(state="reading", step="read", steps_done=0, error=None)
         self.log(f"[{e['index'] + 1}/{len(self.plan)}] {e['name']}: อ่านไฟล์")
@@ -407,7 +481,7 @@ class Job:
                 ln.options = parse_options(saved.get("options"))
             e.update(state="processing")
             try:
-                ln.process(progress=lambda step: self._step(e, step))
+                ln.process(progress=lambda step: self._step(e, step), pool=pool)
                 if saved and saved.get("source_file") == ln.source_file:
                     carry_reviews(ln, [Zone.from_dict(z) for z in saved.get("zones", [])], set(saved.get("auto_zones", {})))
                     ln.sections = saved.get("sections", [])
@@ -436,10 +510,11 @@ class Job:
     def log(self, text: str) -> None:
         """One line of progress to log.txt (open it with Notepad while the job runs) and to the page."""
         line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  {text}"
-        self._log_tail.append(line)
-        del self._log_tail[:-300]
-        with (self.folder / "log.txt").open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        with self.lock:  # lines are processed in parallel threads
+            self._log_tail.append(line)
+            del self._log_tail[:-300]
+            with (self.folder / "log.txt").open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
 
     def checkpoint_path(self, line_id: str) -> Path:
         return self.folder / "checkpoints" / f"{line_id}.pkl"

@@ -38,7 +38,8 @@ const ZOOM_DRAW = "__zoom__";  // S.drawFor value while dragging a zoom box
 const SECTION_DRAW = "__section__";  // ... while marking a section whose results are not used
 const LSTATUS = { pending: ["⏳", "รอตรวจ"], approved: ["✓", "ผ่าน ใช้ในรายงาน"], redo: ["↻", "ต้องประมวลผลใหม่"] };
 const S = { files: [], job: null, line: null, sel: null, editing: null, drawFor: null,
-  view: { x0: 0, x1: 1, y0: 0, y1: 1 }, cursor: null, hidden: new Set(store("hiddenViews", ["viewpoint"])) };
+  view: { x0: 0, x1: 1, y0: 0, y1: 1 }, cursor: null, hidden: new Set(store("hiddenViews", ["viewpoint"])),
+  depthRange: store("depthRange", null) };
 
 function store(key, dflt) {  // per-browser preferences; the page works without them
   try { const v = localStorage.getItem("gpr." + key); return v == null ? dflt : JSON.parse(v); } catch (e) { return dflt; }
@@ -314,6 +315,7 @@ function openReview() {
   renderBanner(S.job.progress);
   history.replaceState(null, "", "#" + S.job.job_id);
   S.line = S.job.lines[0]?.line_id || null;
+  if (line()) S.view = fullView(line());
   buildInfoForm();
   render();
   M.load();
@@ -369,10 +371,13 @@ function renderLine() {
         <div class="yaxis left" data-axis="t"></div>
         <div class="imgwrap" data-view="${v}"><div class="zoomer"><img alt="${title}" draggable="false" src="/api/jobs/${S.job.job_id}/lines/${l.line_id}/${v}.png?${stamp}">${overlay(l)}</div></div>
         <div class="yaxis right" data-axis="d"></div>
+        <div class="scroll v" data-scroll="y" title="เลื่อนทางลึก"><div class="thumb"></div></div>
       </div>
+      <div class="scroll h" data-scroll="x" title="เลื่อนตามแนวสำรวจ"><div class="thumb"></div></div>
       <div class="xaxis" data-axis="x"></div>
     </div>`).join("") || `<p class="muted">เลือกภาพที่จะแสดงด้านบน</p>`;
   applyZoom();
+  showDepthRange();
   renderLineStatus(l);
   renderRecipe(l);
   renderCards(l);
@@ -415,6 +420,8 @@ function applyZoom() {
   $$('[data-axis="t"]').forEach((a) => (a.innerHTML = yTicks(l, "t")));
   $$('[data-axis="d"]').forEach((a) => (a.innerHTML = yTicks(l, "d")));
   $$('[data-axis="x"]').forEach((a) => (a.innerHTML = xTicks(l)));
+  $$('[data-scroll="x"] .thumb').forEach((t) => Object.assign(t.style, { left: `${x0 * 100}%`, width: `${w * 100}%` }));
+  $$('[data-scroll="y"] .thumb').forEach((t) => Object.assign(t.style, { top: `${y0 * 100}%`, height: `${h * 100}%` }));
   const zoomed = w < 0.999 || h < 0.999;
   $("#zoomInfo").textContent = zoomed ? `แสดง trace ${Math.round(x0 * l.n_traces)}–${Math.round(x1 * l.n_traces)}`
     + (l.dx_m ? ` (${((x0 * l.n_traces + (l.trace_offset || 0)) * l.dx_m).toFixed(1)}–${((x1 * l.n_traces + (l.trace_offset || 0)) * l.dx_m).toFixed(1)} m)` : "")
@@ -437,7 +444,33 @@ function zoomAt(fx, fy, factor, xOnly) {  // fx, fy: point that stays put (fract
   const nx = (a) => fx + (a - fx) * factor, ny = (a) => fy + (a - fy) * factor;
   setView(nx(v.x0), nx(v.x1), xOnly ? v.y0 : ny(v.y0), xOnly ? v.y1 : ny(v.y1));
 }
-function resetZoom() { S.view = { x0: 0, x1: 1, y0: 0, y1: 1 }; applyZoom(); }
+// Depth range shown (metres, the same for every pane and every line); null = the whole time window.
+function depthWindow(l) {  // [y0, y1] of the line for the chosen depth range
+  const r = S.depthRange, T = l.time_window_ns;
+  if (!r) return [0, 1];
+  const y0 = Math.min(Math.max(timeAtDepth(l, r[0]) / T, 0), 1), y1 = Math.min(Math.max(timeAtDepth(l, r[1]) / T, 0), 1);
+  return y1 > y0 ? [y0, y1] : [0, 1];
+}
+function fullView(l) { const [y0, y1] = depthWindow(l); return { x0: 0, x1: 1, y0, y1 }; }
+function showDepthRange() {
+  $("#depthTop").value = S.depthRange ? S.depthRange[0] : "";
+  $("#depthBottom").value = S.depthRange ? S.depthRange[1] : "";
+  $("#depthTop").placeholder = "0";
+  const l = line(); $("#depthBottom").placeholder = l ? depthAt(l, l.time_window_ns).toFixed(1) : "";
+}
+function setDepthRange(r) {
+  S.depthRange = r; keep("depthRange", r);
+  const l = line(); if (!l) return;
+  const [y0, y1] = depthWindow(l); setView(S.view.x0, S.view.x1, y0, y1); showDepthRange();
+}
+function readDepthRange() {
+  const top = $("#depthTop").value === "" ? 0 : +$("#depthTop").value, bot = $("#depthBottom").value;
+  if (bot === "" && top === 0) { setDepthRange(null); return; }
+  const l = line(), b = bot === "" ? depthAt(l, l.time_window_ns) : +bot;
+  if (!(b > top) || top < 0) { toast("ความลึกล่างสุดต้องมากกว่าความลึกบนสุด"); showDepthRange(); return; }
+  setDepthRange([top, b]);
+}
+function resetZoom() { const l = line(); if (!l) return; S.view = fullView(l); applyZoom(); }
 function centreOn(trace) {  // keep the zoom, move the window so the trace is in the middle
   const l = line(), v = S.view, w = v.x1 - v.x0, c = (trace + 0.5) / l.n_traces;
   setView(c - w / 2, c + w / 2, v.y0, v.y1);
@@ -836,7 +869,7 @@ const M = {
   },
 };
 async function switchLine(id) {
-  S.line = id; S.sel = null; S.editing = null; S.cursor = null; S.view = { x0: 0, x1: 1, y0: 0, y1: 1 };
+  S.line = id; S.sel = null; S.editing = null; S.cursor = null; S.view = fullView(line());
   render(); M.load();
 }
 
@@ -1053,6 +1086,28 @@ document.addEventListener("mousemove", (e) => {
     S.drag.end = p;
   }
 });
+// Scroll bars: drag the thumb, click the track to move one window, wheel over a bar to scroll along it.
+function scrollBy(axis, d) {
+  const v = S.view;
+  if (axis === "x") setView(v.x0 + d, v.x1 + d, v.y0, v.y1); else setView(v.x0, v.x1, v.y0 + d, v.y1 + d);
+}
+document.addEventListener("mousedown", (e) => {
+  const bar = e.target.closest?.("[data-scroll]");
+  if (!bar || e.button !== 0 || !line()) return;
+  e.preventDefault();
+  const axis = bar.dataset.scroll, r = bar.getBoundingClientRect(), thumb = $(".thumb", bar), v = S.view;
+  const len = axis === "x" ? r.width : r.height, at = axis === "x" ? e.clientX : e.clientY;
+  if (e.target === thumb) { S.sb = { axis, len, at, view: { ...v }, thumb }; thumb.classList.add("drag"); return; }
+  const f = (at - (axis === "x" ? r.left : r.top)) / len, [a, b] = axis === "x" ? [v.x0, v.x1] : [v.y0, v.y1];
+  scrollBy(axis, f < a ? -(b - a) : f > b ? b - a : 0);
+});
+document.addEventListener("mousemove", (e) => {
+  if (!S.sb) return;
+  const { axis, len, at, view: v } = S.sb, d = ((axis === "x" ? e.clientX : e.clientY) - at) / len;
+  if (axis === "x") setView(v.x0 + d, v.x1 + d, v.y0, v.y1); else setView(v.x0, v.x1, v.y0 + d, v.y1 + d);
+});
+document.addEventListener("mouseup", () => { if (S.sb) { S.sb.thumb.classList.remove("drag"); S.sb = null; } });
+
 document.addEventListener("mousedown", (e) => {
   const w = e.target.closest?.(".imgwrap");
   if (!w || e.button !== 0) return;
@@ -1202,6 +1257,13 @@ document.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("wheel", (e) => {
+  const bar = e.target.closest?.("[data-scroll]");
+  if (bar && line()) {
+    e.preventDefault();
+    const v = S.view, w = bar.dataset.scroll === "x" ? v.x1 - v.x0 : v.y1 - v.y0;
+    scrollBy(bar.dataset.scroll, Math.sign(e.deltaY || e.deltaX) * w * 0.15);
+    return;
+  }
   const w = e.target.closest?.(".imgwrap");
   if (!w || !line()) return;
   e.preventDefault();
@@ -1218,6 +1280,9 @@ $("#fileInput").addEventListener("change", (e) => addFiles(e.target.files));
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
+$("#depthTop").addEventListener("change", readDepthRange);
+$("#depthBottom").addEventListener("change", readDepthRange);
+$("#depthAll").addEventListener("click", () => setDepthRange(null));
 $("#runBtn").addEventListener("click", runUpload);
 $("#pickBtn").addEventListener("click", pickFolder);
 $("#scanBtn").addEventListener("click", scanFolder);

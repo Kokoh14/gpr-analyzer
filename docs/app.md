@@ -30,6 +30,10 @@ with the unfinished files (`/resume`). A checkpoint is redone if its source file
 only those traces are processed; trace numbers on screen count from the start of the range, distances in
 metres (axis, zones, report, reference matching) from the start of the line.
 
+Lines are processed several at a time in worker processes (one per spare CPU core, at most 4,
+`jobs.line_workers`). Each line gives exactly the result it gives on its own; if the workers cannot start,
+the lines are processed one by one as before.
+
 Older flow, still supported: drop several files (pairs such as `.iprh + .iprb`, `.rad + .rd3`, `.HD + .DT1`, plus `.txt` with the
 same name) → each line is read, processed (`processing.run_pipeline`) and scanned (`detect.analyze_line`)
 automatically → review screen.
@@ -40,6 +44,10 @@ Review screen:
   ViewPoint-style screen (`processing/viewpoint.py`, off by default, tick it to compare with the unit's software);
 - zoom shared by every view: mouse wheel (Shift = distance axis only), drag to pan, drag a zoom box, double-click
   for the whole line; the axes follow the zoom;
+- depth range shown (ช่วงความลึกที่แสดง, metres): one setting for every view and every line, kept in the browser.
+  "Whole line" and opening another line return to this range; ทั้งหมด shows the whole time window again;
+- scroll bars along the line (under each view) and in depth (right of each view): drag the thumb, click the
+  track to move one window, or turn the wheel over a bar. All views move together;
 - zone boxes coloured by suspected type, hatched artifact regions, time/depth/trace/distance read-out;
 - zone cards with ✓ / ✗ / ⚠ evidence, confidence (high/medium/low, never %), suggested action level;
 - accept / edit (form or re-draw the box) / reject / reset, and drawing new zones the detector missed;
