@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gpr_analyzer.app import folders, geo, kml, scene3d
+from gpr_analyzer.app import folders, geo, kml, scene3d, volume3d
 from gpr_analyzer.app.files import safe_name
 from gpr_analyzer.app.compare import TEMPLATE_CSV
 from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
@@ -149,6 +149,30 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         with j.lock:
             j.set_info({"project": "3D fence demo (SYNTHETIC)", "site": "Simulated grid; not a field survey"})
         return begin(j, write_fence_demo_files(j.upload_dir))
+
+    @app.post("/api/demo-volume")
+    def demo_volume() -> dict:
+        from gpr_analyzer.app.demo import write_volume_demo_files
+
+        j = store.new()
+        with j.lock:
+            j.set_info({"project": "3D volume demo (SYNTHETIC)", "site": "Simulated parallel grid; not a field survey"})
+        return begin(j, write_volume_demo_files(j.upload_dir))
+
+    @app.get("/api/jobs/{job_id}/volume3d")
+    def get_volume3d(job_id: str, frame: str = "gps", cell_m: float = 0.1, dz_m: float = 0.05,
+                     max_gap_m: float = 0.5, max_depth_m: float | None = None) -> dict:
+        j = job(job_id)
+        with j.lock:
+            frozen = scene3d.snapshot(j)
+        return guarded(volume3d.survey_volume, frozen, frame, cell_m, dz_m, max_gap_m, max_depth_m)
+
+    @app.get("/api/jobs/{job_id}/zones3d")
+    def get_zones3d(job_id: str, frame: str = "gps") -> dict:
+        j = job(job_id)
+        with j.lock:
+            frozen = scene3d.snapshot(j)
+        return guarded(volume3d.survey_zones, frozen, frame)
 
     @app.get("/api/jobs/{job_id}/scene3d")
     def get_scene3d(job_id: str, frame: str = "gps", track: str = "grey") -> dict:

@@ -35,3 +35,7 @@
 .survey3d-card:fullscreen { background: var(--bg); padding: 18px; overflow-y: auto; }
 .survey3d-card:fullscreen .s3-stage, .survey3d-card:fullscreen .s3-side { height: calc(100vh - 285px); max-height: none; min-height: 360px; }
 @media(max-width: 760px) { .s3-layout { grid-template-columns: 1fr; } .s3-side { max-height: 160px; } .s3-stage { height: 390px; } .s3-status { top: 62px; left: 15px; text-align: left; } }
+.survey3d-card:not([data-mode=volume]) .s3-volume, .survey3d-card[data-mode=volume] .s3-fence { display: none; }
+.s3-toolbar .s3-voxdb, .s3-toolbar .s3-pos { margin-right: 0; }
+.s3-toolbar input[type=number] { width: 70px; }
+.s3-legend .s3-key { display: inline-block; width: 9px; height: 9px; margin: 0 3px 0 8px; border-radius: 2px; vertical-align: -1px; }

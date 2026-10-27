@@ -851,6 +851,11 @@ $("#demo3dBtn").addEventListener("click", async () => {
   try { S.job = await post("/api/demo3d", {}); openProgress(); }
   catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
 });
+$("#demoVolumeBtn").addEventListener("click", async () => {
+  busy(true, "กำลังสร้างแนวสแกนสังเคราะห์สำหรับปริมาตร 3D…");
+  try { S.job = await post("/api/demo-volume", {}); openProgress(); }
+  catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
+});
 // ------------------------------------------------------------------ summary before the report
 const WARN = {
   unreviewed: (w) => `${w.line_id}: ยังไม่ได้ตรวจ ${w.n} โซน`, not_approved: (w) => `${w.line_id}: ยังไม่ได้กด "ผ่าน"`,
