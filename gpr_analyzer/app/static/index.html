@@ -266,12 +266,16 @@
       <button class="btn ghost small" data-zoom="in" title="ซูมเข้า">＋</button>
       <button class="btn ghost small" data-zoom="out" title="ซูมออก">－</button>
       <button class="btn ghost small" data-zoom="box" title="ลากกรอบบริเวณที่ต้องการซูม">⬚ ลากกรอบซูม</button>
-      <button class="btn ghost small" data-zoom="reset" title="เต็มเส้น">⟲ เต็มเส้น</button>
+      <button class="btn ghost small" data-zoom="reset" title="เต็มเส้น ตามช่วงความลึกที่ตั้งไว้">⟲ เต็มเส้น</button>
       <span class="small muted" id="zoomInfo"></span>
+      <span class="depthrange small" title="ช่วงความลึกที่แสดงในทุกภาพและทุกเส้น ใช้แถบเลื่อนด้านขวาของภาพดูส่วนที่ลึกกว่านี้ได้">
+        ช่วงความลึกที่แสดง <input id="depthTop" type="number" min="0" step="0.5" aria-label="ความลึกบนสุด (m)">
+        – <input id="depthBottom" type="number" min="0.1" step="0.5" aria-label="ความลึกล่างสุด (m)"> m
+        <button class="btn ghost small" id="depthAll" title="แสดงทุกความลึกที่บันทึกไว้">ทั้งหมด</button></span>
       <span class="spacer"></span>
       <span class="small muted">ภาพที่แสดง:</span><span id="viewToggles" class="view-toggles"></span>
     </div>
-    <div class="hint small muted">หมุนล้อเมาส์ = ซูม (กด Shift ค้างไว้ = ซูมเฉพาะแนวระยะ) · ลากภาพ = เลื่อน · ดับเบิลคลิก = เต็มเส้น</div>
+    <div class="hint small muted">หมุนล้อเมาส์ = ซูม (กด Shift ค้างไว้ = ซูมเฉพาะแนวระยะ) · ลากภาพหรือแถบเลื่อน = เลื่อน (ทุกภาพเลื่อนตามกัน) · ดับเบิลคลิก = เต็มเส้น</div>
     <div class="readout" id="readout">ชี้บนภาพเพื่อดูตำแหน่ง</div>
     <div id="panes"></div>
 

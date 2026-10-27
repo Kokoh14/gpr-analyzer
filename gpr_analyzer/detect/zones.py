@@ -230,14 +230,33 @@ def _wide_enough(b: tuple, r: Radargram, v: float, per: int, hyperbolas: list[Hy
 
 def _row_runs_at_least(mask: np.ndarray, length: int) -> np.ndarray:
     """Pixels that belong to a horizontal run of True of at least `length` (per row)."""
+    n_s, n_t = mask.shape
     out = np.zeros_like(mask)
-    for i in np.flatnonzero(mask.any(axis=1)):
-        row = mask[i]
-        d = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
-        starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
-        for a, b in zip(starts, ends):
-            if b - a >= length:
-                out[i, a:b] = True
+    cand = np.flatnonzero(np.count_nonzero(mask, axis=1) >= length)  # other rows cannot hold such a run
+    if not cand.size:
+        return out
+    # candidate rows laid end to end with one False between them, so runs never continue into the next row
+    flat = np.zeros((cand.size, n_t + 1), dtype=np.int8)
+    flat[:, :n_t] = mask[cand]
+    d = np.diff(flat.ravel(), prepend=np.int8(0))
+    starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
+    keep = ends - starts >= length
+    edge = np.zeros(flat.size + 1, dtype=np.int32)
+    edge[starts[keep]] += 1
+    edge[ends[keep]] -= 1
+    out[cand] = (np.cumsum(edge[:-1]) > 0).reshape(cand.size, n_t + 1)[:, :n_t]
+    return out
+
+
+def _shifted_rows(padded: np.ndarray, pad: int, n_s: int, shift: np.ndarray) -> np.ndarray:
+    """Rows pad - shift[x] .. pad - shift[x] + n_s of each column x of `padded`.
+
+    shift changes only now and then along x, so whole blocks of columns are copied at once."""
+    out = np.empty((n_s, padded.shape[1]), dtype=padded.dtype)
+    edges = np.concatenate(([0], np.flatnonzero(np.diff(shift)) + 1, [shift.size]))
+    for a, b in zip(edges[:-1], edges[1:]):
+        r = pad - int(shift[a])
+        out[:, a:b] = padded[r:r + n_s, a:b]
     return out
 
 
@@ -256,17 +275,18 @@ def long_reflectors(mask: np.ndarray, length: int, max_dip: float, n_slopes: int
         n_slopes = int(np.ceil(2 * max_dip * length / 1.5)) + 1
     if not mask.any():
         return out
-    for slope in np.linspace(-max_dip, max_dip, n_slopes):
-        shift = np.round(slope * (x - n_t / 2)).astype(int)
-        rows = (np.arange(n_s)[:, None] + shift[None, :])  # sheared row index for each pixel
-        valid = (rows >= 0) & (rows < n_s)
-        sheared = np.zeros_like(mask)
-        sheared[np.where(valid, rows, 0), x[None, :].repeat(n_s, 0)] |= mask & valid
+    slopes = np.linspace(-max_dip, max_dip, n_slopes)
+    shifts = [np.round(slope * (x - n_t / 2)).astype(int) for slope in slopes]
+    pad = max(int(np.abs(sh).max()) for sh in shifts) + 1
+    padded = np.zeros((n_s + 2 * pad, n_t), dtype=mask.dtype)  # rows outside the section read as False
+    padded[pad:pad + n_s] = mask
+    padded_long = np.zeros_like(padded)
+    for shift in shifts:
+        sheared = _shifted_rows(padded, pad, n_s, shift)  # pixel (i, x) moves to row i + shift[x]
         # a run in the sheared image allows ±1 row of wobble
         thick = sheared | np.roll(sheared, 1, axis=0) | np.roll(sheared, -1, axis=0)
-        long_ = _row_runs_at_least(thick, length) & sheared
-        back = long_[np.where(valid, rows, 0), x[None, :].repeat(n_s, 0)] & valid
-        out |= back & mask
+        padded_long[pad:pad + n_s] = _row_runs_at_least(thick, length) & sheared
+        out |= _shifted_rows(padded_long, pad, n_s, -shift) & mask
     return out
 
 

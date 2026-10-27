@@ -76,7 +76,7 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--bg
 .pane-cap b { font-size: 13px; }
 .legend { display: inline-flex; align-items: center; gap: 4px; }
 .legend .bar { width: 120px; height: 10px; border-radius: 2px; }
-.plot { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; }
+.plot { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 12px; }
 .yaxis { position: relative; font-size: 10px; color: var(--muted); }
 .yaxis span { position: absolute; transform: translateY(-50%); white-space: nowrap; }
 .yaxis.left span { right: 4px; } .yaxis.right span { left: 4px; }
@@ -113,7 +113,15 @@ input, select, textarea { font: inherit; color: var(--ink); background: var(--bg
 .zlabel { font: 700 11px system-ui, sans-serif; color: #fff; text-shadow: 0 0 3px #000, 0 0 3px #000; white-space: nowrap;
   transform: translate(-50%, -150%); }
 .leaflet-container { font: inherit; }
-.xaxis { position: relative; height: 42px; margin: 0 44px; font-size: 10px; color: var(--muted); }
+.xaxis { position: relative; height: 42px; margin: 0 56px 0 44px; font-size: 10px; color: var(--muted); }
+/* scroll bars: the thumb is the part of the line shown; every pane's bars move together */
+.scroll { position: relative; background: color-mix(in srgb, var(--line) 60%, transparent); border-radius: 6px; cursor: pointer; }
+.scroll.h { height: 10px; margin: 3px 56px 0 44px; }
+.scroll .thumb { position: absolute; background: var(--muted); border-radius: 6px; opacity: .7; cursor: grab; }
+.scroll .thumb:hover, .scroll .thumb.drag { opacity: 1; }
+.scroll.v .thumb { left: 1px; right: 1px; } .scroll.h .thumb { top: 1px; bottom: 1px; }
+.depthrange { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
+.depthrange input { width: 58px; padding: 1px 4px; }
 .xaxis span { position: absolute; transform: translateX(-50%); top: 2px; white-space: nowrap; }
 .xaxis .ttl { left: 50%; top: 27px; }
 .zbox { position: absolute; border: 2px solid var(--c); box-shadow: 0 0 0 1px rgba(0,0,0,.55); cursor: pointer; }

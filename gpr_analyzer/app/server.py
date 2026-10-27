@@ -116,11 +116,12 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
     @app.post("/api/jobs/{job_id}/resume")
     def resume(job_id: str) -> dict:
         j = job(job_id)
-        with j.lock:
-            if background:
+        if background:
+            with j.lock:
                 j.resume()
-            else:
-                j.resume_now()
+        else:
+            j.resume_now()  # not under the lock: run_plan's line threads take it
+        with j.lock:
             return j.to_json()
 
     @app.get("/api/jobs/{job_id}/log.txt")
