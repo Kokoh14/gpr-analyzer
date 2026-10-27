@@ -258,6 +258,35 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         return j.to_json()
 
     # ---------------------------------------------------------- comparison with reference software
+    @app.get("/api/jobs/{job_id}/lines/{line_id}/workflow.json")
+    def workflow_export(job_id: str, line_id: str) -> Response:
+        import json
+        from gpr_analyzer.processing.workflows import export_workflow
+
+        j = job(job_id)
+        with j.lock:
+            ln = guarded(j.line, line_id)
+            document = guarded(export_workflow, ln.result, ln.options)
+        return Response(json.dumps(document, ensure_ascii=False, indent=2), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{line_id}-workflow.json"'})
+
+    @app.post("/api/workflows/validate")
+    def workflow_validate(body: dict = Body(...)) -> dict:
+        from gpr_analyzer.processing.workflows import load_workflow
+        from dataclasses import asdict
+
+        opt, tracks = guarded(load_workflow, body)
+        return {"options": asdict(opt), "tracks": sorted(tracks)}
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/workflows/compare")
+    def workflow_compare(job_id: str, line_id: str, body: dict = Body(...)) -> dict:
+        from gpr_analyzer.app.workflows import compare_workflows
+
+        j = job(job_id)
+        with j.lock:
+            raw = guarded(j.line, line_id).raw
+        return guarded(compare_workflows, raw, body.get("left"), body.get("right"))
+
     def ref_route(job_id: str, fn, *a: Any) -> dict:
         j = job(job_id)
         with j.lock:

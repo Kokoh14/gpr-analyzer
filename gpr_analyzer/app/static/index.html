@@ -6,6 +6,7 @@
 <title>GPR Analyzer</title>
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/workflows.css">
 <link rel="stylesheet" href="/static/survey3d.css">
 <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.min.js"}}</script>
 </head>
@@ -306,6 +307,26 @@
         <a class="btn ghost" data-export="features.csv">ส่งออก CSV</a></div>
     </details>
 
+    <details class="card" id="workflowCard">
+      <summary>Workflow · บันทึก นำกลับมาใช้ และเทียบ A/B</summary>
+      <p class="small muted">ไฟล์ JSON เก็บ ProcessingOptions และประวัติค่าที่ใช้จริง ค่าอัตโนมัติจะคำนวณใหม่ตามข้อมูล · การเทียบไม่เปลี่ยนผลที่บันทึกไว้</p>
+      <div class="cmp-bar"><a class="btn" id="workflowExport">บันทึก workflow เส้นปัจจุบัน</a></div>
+      <div class="workflow-grid">
+        <div><b>A</b> <span id="workflowNameA">ค่าปัจจุบันของเส้น</span><br>
+          <button class="btn small" id="workflowLoadA">โหลดไฟล์ A</button><button class="btn small" id="workflowApplyA">ใช้ A กับเส้นนี้</button>
+          <input id="workflowFileA" type="file" accept=".json" hidden></div>
+        <div><b>B</b> <span id="workflowNameB">ยังไม่เลือกไฟล์</span><br>
+          <button class="btn small" id="workflowLoadB">โหลดไฟล์ B</button><button class="btn small" id="workflowApplyB">ใช้ B กับเส้นนี้</button>
+          <input id="workflowFileB" type="file" accept=".json" hidden></div>
+      </div>
+      <button class="btn primary" id="workflowCompare">เทียบ A/B บนเส้นปัจจุบัน</button>
+      <p class="small muted" id="workflowStatus"></p>
+      <div id="workflowViews" class="workflow-grid" hidden>
+        <div><img id="workflowImageA" alt="Workflow A analysis"><details><summary>พารามิเตอร์ A</summary><pre id="workflowLogA" class="logbox"></pre></details></div>
+        <div><img id="workflowImageB" alt="Workflow B analysis"><details><summary>พารามิเตอร์ B</summary><pre id="workflowLogB" class="logbox"></pre></details></div>
+      </div>
+    </details>
+
     <details class="recipe card" id="recipe">
       <summary>ขั้นตอนประมวลผลและพารามิเตอร์ <span class="muted" id="recipeNote"></span></summary>
       <table class="steps"><thead><tr><th>ขั้นตอน</th><th>ค่าที่ใช้</th><th>เหตุผล</th><th>ผู้เลือก</th></tr></thead><tbody id="stepRows"></tbody></table>
@@ -359,6 +380,7 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/workflows.js"></script>
 <script type="module" src="/static/survey3d.js"></script>
 <script src="/static/thick-slice.js"></script>
 </body>
