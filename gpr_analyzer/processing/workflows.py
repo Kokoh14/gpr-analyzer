@@ -8,7 +8,7 @@ from dataclasses import asdict
 from gpr_analyzer.processing.auto import ProcessingOptions, run_pipeline
 
 SCHEMA = "gpr-analyzer.workflow"
-TRACKS = {"analysis", "display", "layers", "envelope", "energy", "viewpoint"}
+TRACKS = {"analysis", "display", "layers", "envelope", "energy", "viewpoint", "autodisplay"}
 
 
 def options_from_dict(values: dict) -> ProcessingOptions:
