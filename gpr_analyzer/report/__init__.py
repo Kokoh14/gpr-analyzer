@@ -21,8 +21,11 @@ __all__ = ["write_report", "compose", "Report", "SurveyResult", "SurveyInfo", "L
 FORMATS = (".pdf", ".docx", ".html", ".json", ".csv", ".cnf", ".pobj", ".lobj")
 
 
-def write_report(survey: SurveyResult, path: str | os.PathLike, lang: str = "bi") -> Path:
-    """Write one report file; the format comes from the extension (.pdf .docx .html .json .csv)."""
+def write_report(survey: SurveyResult, path: str | os.PathLike, lang: str = "bi", signoff=None) -> Path:
+    """Write one report file; the format comes from the extension (.pdf .docx .html .json .csv).
+
+    signoff (compose.Signoff, from the review app) adds the review record and draft reasons to PDF/Word/HTML.
+    """
     path = Path(path)
     ext = path.suffix.lower()
     if ext not in FORMATS:
@@ -37,7 +40,7 @@ def write_report(survey: SurveyResult, path: str | os.PathLike, lang: str = "bi"
         from gpr_analyzer.report.exports import zones_csv
         zones_csv(survey, path)
     else:
-        report = compose(survey, lang=lang)
+        report = compose(survey, lang=lang, signoff=signoff)
         if ext == ".pdf":
             from gpr_analyzer.report.pdf import render_pdf
             render_pdf(report, path)

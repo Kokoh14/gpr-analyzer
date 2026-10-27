@@ -37,6 +37,15 @@ region is `ArtifactRegion(trace_start, trace_end, reason)` (hatched on the figur
 Processing may return `(radargram, steps)` with steps as `ProcessingStep(name, params, auto)`,
 `(name, params)` tuples or dicts; `name` codes are translated as `step_<name>`.
 
+## Review app additions (`compose.Signoff`)
+
+`compose(survey, signoff=Signoff(...))` / `write_report(..., signoff=...)` add what the review app knows:
+draft reasons (any reason → draft with the reasons in the banner), reviewer, per-line decisions, input file
+SHA-256, an overview map PNG and reviewer snapshots. Section 8 (review record) lists them, plus the rejected
+zones. `report.package.write_package` writes PDF + Word + CSV + KMZ (`report.kml`) + JSON + manifest as one
+ZIP. Without a signoff (CLI) the old rule stays: draft while any zone is `auto`. Rejected zones never appear in
+the zone table, counts or recommendations in either case.
+
 ## Writing rules (enforced by `rules.find_wording_violations` in tests)
 
 - Never "void found" / "พบโพรง" without ground truth: say void-like zone / โซนคล้ายโพรง.
