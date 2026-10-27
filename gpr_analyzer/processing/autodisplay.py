@@ -154,7 +154,7 @@ def choose_background(d: np.ndarray, dt_ns: float, dx_m: float | None, rows: sli
     params = {"window": label, "window_traces": n if n else "all", "statistic": "median",
               "banding_before_pct": round(100 * before, 1), "banding_after_pct": round(100 * after, 1),
               "narrowest_tried_pct": round(100 * best, 1), "ringing_ns": _spans(sys_rows * dt_ns)}
-    why = (f"widest window that leaves under {RESIDUAL_MAX:.0%} banding (or twice what the narrowest, {cands[-1][0]}, leaves), "
+    why = (f"widest window that leaves a banding share under {RESIDUAL_MAX:g} (or twice what the narrowest, {cands[-1][0]}, leaves), "
            "measured only at the times where every trace rings alike; wider windows keep flat reflectors such as cavity roofs")
     return out, params, why
 
@@ -229,7 +229,7 @@ def auto_display(d0: np.ndarray, dt_ns: float, dx_m: float | None, fc: float,
     sig = np.abs(d[skip:][:, live])  # past the direct wave; noise below cap2 is not boosted, so it sits low
     clip = float(np.percentile(sig, CLIP_PCT)) or 1.0
     steps.append(("display_contrast", {"clip_percentile": CLIP_PCT, "clip_value": float(f"{clip:.4g}")},
-                  "colour scale saturates only the strongest 1 % below the direct wave"))
+                  "colour scale saturates only the strongest 1 in 100 samples below the direct wave"))
     return d, steps, clip
 
 
