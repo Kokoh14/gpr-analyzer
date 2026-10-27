@@ -22,7 +22,7 @@ from gpr_analyzer.processing import filters as F
 from gpr_analyzer.processing.auto import ProcessingOptions, run_pipeline
 from gpr_analyzer.processing.screen_fit import compare, load_screenshot, register
 
-TRACKS = ("analysis", "display", "viewpoint")
+TRACKS = ("analysis", "display", "viewpoint", "autodisplay")
 
 
 def _zero(res) -> float:

@@ -7,6 +7,8 @@ Two output tracks:
 - analysis: amplitude-preserving (SEC gain derived from the data's own decay,
   capped at the noise floor). Detection and scoring read this one.
 - display: AGC on top, for the eye only. Never score on it.
+- autodisplay: display filters chosen from the line's own spectrum, ringing and decay
+  (processing/autodisplay.py), branched off after time zero. For the eye only.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import numpy as np
 
 from gpr_analyzer.core import Radargram
 from gpr_analyzer.processing import filters as F
+from gpr_analyzer.processing.autodisplay import auto_display
 from gpr_analyzer.processing.migration import kirchhoff_migration, stolt_migration
 from gpr_analyzer.processing.velocity import HyperbolaFit, estimate_velocity
 from gpr_analyzer.processing.viewpoint import viewpoint_display
@@ -83,6 +86,7 @@ class ProcessingResult:
     hyperbola_fits: list[HyperbolaFit]
     gain_curve: np.ndarray
     noise_floor_sample: int
+    autodisplay: Radargram | None = None  # automatic display filters (processing/autodisplay.py), display only
     log: list[StepLog] = field(default_factory=list)
     viewpoint: Radargram | None = None  # ViewPoint-like screen (processing/viewpoint.py), display only
     options: ProcessingOptions | None = None  # exact inputs for workflow replay; never rounded log values
@@ -100,6 +104,11 @@ class ProcessingResult:
 def _odd(n: float) -> int:
     k = max(int(round(n)), 1)
     return k if k % 2 else k + 1
+
+
+def _with_clip(rg: Radargram, clip: float) -> Radargram:
+    rg.metadata["display_clip"] = clip  # colour-scale limit chosen with the filters
+    return rg
 
 
 def auto_process(rg: Radargram, options: ProcessingOptions | None = None) -> tuple[Radargram, list[dict[str, Any]]]:
@@ -136,8 +145,9 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
                  progress: Callable[[str], None] | None = None, *, tracks: set[str] | None = None) -> ProcessingResult:
     """progress reports completed steps. tracks=None keeps all outputs for existing API callers."""
     opt = options or ProcessingOptions()
-    tracks = {"analysis", "display", "layers", "envelope", "energy", "viewpoint"} if tracks is None else tracks
-    if tracks - {"analysis", "display", "layers", "envelope", "energy", "viewpoint"}:
+    all_tracks = {"analysis", "display", "layers", "envelope", "energy", "viewpoint", "autodisplay"}
+    tracks = all_tracks if tracks is None else tracks
+    if tracks - all_tracks:
         raise ValueError("unknown processing track")
     log: list[StepLog] = _ReportingLog(progress) if progress else []
     dt = rg.dt_ns
@@ -201,6 +211,8 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
         )
     else:
         log.append(StepLog("time_zero", {"applied": False}, "disabled by user", False))
+
+    tz_data = d  # time-zeroed and dewowed: the automatic display chain branches off here (it copies)
 
     # 4. Bandpass
     if opt.band_mhz:
@@ -328,6 +340,13 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
             )
         )
 
+    # 12. Automatic display filters (own band, background window, gain and contrast from this line)
+    auto_disp = None
+    if "autodisplay" in tracks:
+        auto_disp, auto_steps, auto_clip = auto_display(tz_data, dt, rg.dx_m, fc, opt.gain_max_db)
+        for name, params, why in auto_steps:
+            log.append(StepLog(name, params, "display only: " + why))
+
     def mk(arr: np.ndarray, kind: str) -> Radargram:
         out = rg.copy_with(data=arr, velocity_m_per_ns=v)
         out.metadata["track"] = kind
@@ -349,6 +368,7 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
         hyperbola_fits=fits,
         gain_curve=gain,
         noise_floor_sample=cap,
+        autodisplay=_with_clip(mk(auto_disp, "autodisplay"), auto_clip) if auto_disp is not None else None,
         log=log,
         viewpoint=mk(vp.data, "viewpoint") if vp is not None else None,
         options=ProcessingOptions(**asdict(opt)),
