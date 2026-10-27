@@ -134,7 +134,11 @@ def render_docx(report: Report, path: str | os.PathLike | None = None,
                         _shade(cells[j], ACTION_FILL.get(tag, "FFFFFF"))
             doc.add_paragraph()
         elif isinstance(b, Figure):
-            doc.add_picture(io.BytesIO(b.png), width=int(usable * b.width))
+            w = int(usable * b.width)
+            max_h = (sec.page_height - sec.top_margin - sec.bottom_margin) * 0.7
+            if w * b.aspect > max_h:
+                w = int(max_h / b.aspect)
+            doc.add_picture(io.BytesIO(b.png), width=w)
             for line in b.caption:
                 p = doc.add_paragraph()
                 r = p.add_run(line)

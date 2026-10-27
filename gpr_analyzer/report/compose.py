@@ -49,6 +49,7 @@ class Figure:
     png: bytes
     caption: list[str]
     width: float = 1.0  # fraction of text width
+    aspect: float = 3.2 / 7.0  # height / width, for keeping the figure and its caption on one page
 
 
 @dataclass
@@ -84,6 +85,32 @@ class Report:
         return "\n".join(parts)
 
 
+@dataclass
+class Signoff:
+    """What the review app adds to the zone records: who confirmed what, from which files.
+
+    draft_reasons are (code, params) pairs translated as draft_<code>; any reason makes the report a
+    watermarked draft. Line dicts carry line_id, status, status_note, sections and n_manual; inputs carry
+    name, size and sha256 of each data file; snapshots carry png, caption, source and created.
+    """
+    draft_reasons: list[tuple[str, dict]] = field(default_factory=list)
+    reviewer: str = ""
+    generated_at: str = ""
+    app_version: str = ""
+    lines: list[dict] = field(default_factory=list)
+    inputs: list[dict] = field(default_factory=list)
+    map_png: bytes | None = None
+    snapshots: list[dict] = field(default_factory=list)
+
+
+def png_aspect(png: bytes) -> float:
+    """height / width from the PNG header."""
+    import struct
+
+    w, h = struct.unpack(">II", png[16:24])
+    return h / w if w else 1.0
+
+
 def fmt(x: float | None, nd: int = 2) -> str:
     return "–" if x is None else f"{x:.{nd}f}"
 
@@ -93,8 +120,9 @@ def _ids(zones: list[Zone]) -> str:
 
 
 class _Composer:
-    def __init__(self, survey: SurveyResult, lang: str, figures: bool) -> None:
+    def __init__(self, survey: SurveyResult, lang: str, figures: bool, signoff: Signoff | None = None) -> None:
         self.s = survey
+        self.so = signoff
         self.tr = Translator(lang)
         self.t = self.tr.t
         self.figures = figures
@@ -214,6 +242,10 @@ class _Composer:
         from gpr_analyzer.report import figures as figs
 
         self.blocks.append(Heading(self.t("sec_lines")))
+        if self.figures and self.so and self.so.map_png:
+            self.fig_no += 1
+            self.blocks.append(Figure(self.so.map_png, self.tr.paras("fig_map", n=self.fig_no),
+                                      width=0.8, aspect=png_aspect(self.so.map_png)))
         for ln in self.s.lines:
             self.blocks.append(Heading(f"{self.t('line')} {ln.line_id}", 2))
             zs = [z for z in ln.zones if z.review != "rejected"]
@@ -233,10 +265,27 @@ class _Composer:
                     f"trace {a.trace_start}–{a.trace_end} ({self.t('art_' + a.reason) if self.tr.has('art_' + a.reason) else a.reason})"
                     for a in ln.artifact_regions), "small"))
 
+    def snapshots(self) -> None:
+        if not (self.figures and self.so and self.so.snapshots):
+            return
+        self.blocks.append(Heading(self.t("sec_snapshots"), 2))
+        self.paras("snap_note", style="small")
+        for snap in self.so.snapshots:
+            self.fig_no += 1
+            key = "snap_src_" + snap.get("source", "other")
+            key = key if self.tr.has(key) else "snap_src_other"
+            langs = ("th", "en") if self.tr.lang == "bi" else (self.tr.lang,)
+            cap = [f"{self.t('figure')} {self.fig_no}: {snap.get('caption') or self.t(key)}"]
+            cap += [Translator(lg).t("snap_meta", src=Translator(lg).t(key), when=snap.get("created", "")) for lg in langs]
+            if snap.get("source") == "3d":
+                cap += self.tr.paras("snap_3d_note")
+            self.blocks.append(Figure(snap["png"], cap, aspect=png_aspect(snap["png"])))
+
     def zone_table(self) -> None:
         self.blocks.append(PageBreak())
         self.blocks.append(Heading(self.t("sec_zones")))
-        zones = sorted(self.s.zones, key=lambda z: (action_rank(self.action(z)), z.zone_id))
+        zones = sorted((z for z in self.s.zones if z.review != "rejected"),
+                       key=lambda z: (action_rank(self.action(z)), z.line_id, z.zone_id))
         if not zones:
             self.paras("no_zones")
             return
@@ -307,7 +356,7 @@ class _Composer:
         self.blocks.append(Heading(self.t("sec_limits")))
         items: list[str] = []
         for ln in self.s.lines:
-            zs = [z for z in ln.zones if not z.is_artifact] or None
+            zs = [z for z in ln.zones if not z.is_artifact and z.review != "rejected"] or None
             dv = max((z.velocity_uncertainty_m_per_ns or 0 for z in zs), default=0) if zs else 0
             dv = dv or 0.02
             d = max((z.depth_bottom_m for z in zs), default=None) if zs else None
@@ -352,6 +401,58 @@ class _Composer:
             items.append(f"{text} ({', '.join(ids)})" if ids else text)
         self.blocks.append(Bullets(items or self.tr.paras("rec_none")))
 
+    def review_record(self) -> None:
+        """Who confirmed the results, what was rejected or left out, and the exact input files."""
+        so = self.so
+        self.blocks.append(Heading(self.t("sec_record")))
+        status = self.t("status_draft") if self.draft else self.t("status_final")
+        rows = [[self.t("report_status"), status]]
+        if so is not None:
+            rows += [[self.t("reviewer"), self.blank(so.reviewer)],
+                     [self.t("generated_at"), self.blank(so.generated_at)],
+                     [self.t("software"), f"gpr-analyzer {so.app_version}".strip()]]
+        self.blocks.append(Table(header=[], rows=rows, widths=[1.3, 4], kind="kv"))
+        if self.draft and so is not None and so.draft_reasons:
+            self.blocks.append(Bullets([self.t("draft_" + c, **p) for c, p in so.draft_reasons]))
+
+        meta = {d["line_id"]: d for d in (so.lines if so else [])}
+        rows = []
+        for ln in self.s.lines:
+            m = meta.get(ln.line_id, {})
+            n = {r: sum(1 for z in ln.zones if z.review == r) for r in ("accepted", "edited", "rejected", "auto")}
+            st = self.t("lstatus_" + m["status"]) if m.get("status") else "–"
+            if m.get("status_note"):
+                st += f" ({m['status_note']})"
+            secs = "; ".join(f"{x['section_id']} trace {x['trace_start']}–{x['trace_end']}"
+                             + (f" ({x['reason']})" if x.get("reason") else "") for x in m.get("sections", [])) or "–"
+            rows.append([ln.line_id, st, str(n["accepted"]), str(n["edited"]), str(m.get("n_manual", "–")),
+                         str(n["rejected"]), str(n["auto"]), secs])
+        self.blocks.append(Table(
+            header=[self.t("line"), self.t("line_status"), self.t("col_accepted"), self.t("col_edited"),
+                    self.t("n_manual"), self.t("col_rejected"), self.t("col_auto"), self.t("excluded_sections")],
+            rows=rows, widths=[0.8, 1.6, 0.9, 0.9, 0.9, 0.9, 0.9, 2.4]))
+        self.paras("record_counts_note", style="small")
+
+        rejected = [z for z in self.s.zones if z.review == "rejected"]
+        self.blocks.append(Heading(self.t("rejected_title"), 3))
+        if rejected:
+            self.blocks.append(Table(
+                header=[self.t("zone"), self.t("line"), self.t("traces"), self.t("depth_m"), self.t("type"),
+                        self.t("note")],
+                rows=[[z.zone_id, z.line_id, f"{z.trace_start}–{z.trace_end}",
+                       f"{fmt(z.depth_top_m, 1)}–{fmt(z.depth_bottom_m, 1)}", self.t("type_" + z.suspected_type),
+                       z.note or "–"] for z in sorted(rejected, key=lambda z: (z.line_id, z.zone_id))],
+                widths=[0.7, 0.7, 1.2, 1, 1.6, 3]))
+        else:
+            self.paras("rejected_none")
+
+        if so is not None and so.inputs:
+            self.blocks.append(Heading(self.t("inputs_title"), 3))
+            self.blocks.append(Table(
+                header=[self.t("source_file"), self.t("file_size"), "SHA-256"],
+                rows=[[f["name"], f"{f['size']:,}", f["sha256"]] for f in so.inputs], widths=[2.2, 1, 4.4]))
+            self.paras("inputs_note", style="small")
+
     def glossary(self) -> None:
         self.blocks.append(Heading(self.t("sec_glossary"), 2))
         self.blocks.append(Table(header=[self.t("confidence"), ""],
@@ -363,20 +464,32 @@ class _Composer:
 
     def build(self) -> Report:
         i = self.s.info
-        for section in (self.summary, self.job, self.processing, self.lines, self.zone_table,
-                        self.limitations, self.recommendations, self.glossary):
+        self.draft = self.s.unreviewed or bool(self.so and self.so.draft_reasons)
+        sections = [self.summary, self.job, self.processing, self.lines, self.snapshots, self.zone_table,
+                    self.limitations, self.recommendations]
+        if self.so is not None:
+            sections.append(self.review_record)
+        for section in sections + [self.glossary]:
             section()
+        draft_text = self.tr.paras("draft_banner")
+        if self.so is not None and self.so.draft_reasons:
+            draft_text = self.tr.paras("draft_banner_reasons") + [
+                "• " + self.t("draft_" + c, **p) for c, p in self.so.draft_reasons]
         sub = " · ".join(x for x in (i.project, i.site) if x)
         meta = [f"{self.t('report_date')}: {i.report_date or date.today().isoformat()}"]
         if i.report_id:
             meta.insert(0, f"{self.t('report_id')}: {i.report_id}")
         return Report(
             title=self.t("report_title"), subtitle=" · ".join([sub, *meta]) if sub else " · ".join(meta),
-            lang=self.tr.lang, draft=self.s.unreviewed, draft_text=self.tr.paras("draft_banner"),
+            lang=self.tr.lang, draft=self.draft, draft_text=draft_text,
             draft_mark=self.t("draft_mark"), page_label=self.t("page"),
             footer=f"{self.t('generated_by')} · {i.report_id or ''}".rstrip(" ·"), blocks=self.blocks)
 
 
-def compose(survey: SurveyResult, lang: str = "bi", figures: bool = True) -> Report:
-    """Build the report content. figures=False skips matplotlib (fast tests)."""
-    return _Composer(survey, lang, figures).build()
+def compose(survey: SurveyResult, lang: str = "bi", figures: bool = True, signoff: Signoff | None = None) -> Report:
+    """Build the report content. figures=False skips matplotlib (fast tests).
+
+    signoff (from the review app) adds the review record, map and snapshots, and makes the report a draft
+    while any of its draft_reasons remain.
+    """
+    return _Composer(survey, lang, figures, signoff).build()

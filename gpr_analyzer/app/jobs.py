@@ -8,6 +8,7 @@ records are the training/calibration data the project plans to collect.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import pickle
@@ -32,6 +33,8 @@ from gpr_analyzer.detect import crossline
 from gpr_analyzer.io import read as read_file
 from gpr_analyzer.processing import ProcessingOptions, ProcessingResult, run_pipeline
 from gpr_analyzer.report import write_report
+from gpr_analyzer.report.compose import Signoff
+from gpr_analyzer.report.i18n import Translator
 from gpr_analyzer.report.rules import suggest_action
 from gpr_analyzer.report.schema import (ACTION_LEVELS, CONFIDENCE_LEVELS, SURFACE_USES, ZONE_TYPES, ArtifactRegion,
                                         Evidence, LineResult, ProcessingStep, SurveyInfo, SurveyResult, Zone)
@@ -292,6 +295,7 @@ class Job:
     _thread: threading.Thread | None = field(default=None, repr=False)
     _log_tail: list[str] = field(default_factory=list, repr=False)
     _pending_lines: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+    _hash_cache: dict[tuple, str] = field(default_factory=dict, repr=False)  # input file SHA-256 by (path, size, mtime)
 
     @property
     def upload_dir(self) -> Path:
@@ -454,6 +458,7 @@ class Job:
                         "companions": ln.companions, "options": ln.options, "result": slim,
                         "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones,
                         "artifact_regions": [asdict(r) for r in ln.artifact_regions], "trace_offset": ln.trace_offset}}
+        e["source_stamp"] = rec["source_stamp"]  # the report checks the files are still the ones processed
         tmp = d.with_suffix(".tmp")
         with tmp.open("wb") as f:
             pickle.dump(rec, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -713,6 +718,8 @@ class Job:
         zs = [z for ln in self.lines for z in ln.zones if not ln.excluded(z)]
         return {"info": asdict(self.info), "lang": self.lang, "reviewer": self.reviewer, "lines": lines,
                 "findings": findings, "warnings": warn, "ready": not warn,
+                "final": not self.draft_reasons(), "draft_reasons": self.draft_reason_texts(),
+                "snapshots": self.snapshots(),
                 "totals": {"lines": len(self.lines), "approved": sum(ln.status == "approved" for ln in self.lines),
                            "length_m": round(sum(x["length_m"] or 0 for x in lines), 1),
                            "zones": len(zs), "review": review_counts(zs),
@@ -843,7 +850,154 @@ class Job:
         if name == "zones-condor.zip":
             from gpr_analyzer.report.exports import condor_zip
             return condor_zip(self.survey(), out / name)
-        return write_report(self.survey(), out / name, lang=self.lang)
+        survey = self.survey()
+        return write_report(survey, out / name, lang=self.lang,
+                            signoff=self.signoff(survey) if name.startswith("report.") else None)
+
+    # ------------------------------------------------------------------ confirmed report
+    def draft_reasons(self) -> list[tuple[str, dict[str, Any]]]:
+        """Why the report would still be a draft; empty = every result was confirmed by a person."""
+        out: list[tuple[str, dict[str, Any]]] = []
+        auto = [(ln.line_id, z) for ln in self.lines for z in ln.zones if z.review == "auto" and not ln.excluded(z)]
+        if auto:
+            out.append(("unreviewed", {"n": len(auto), "lines": ", ".join(dict.fromkeys(lid for lid, _ in auto))}))
+        pending = [ln.line_id for ln in self.lines if ln.status == "pending"]
+        if pending:
+            out.append(("not_approved", {"lines": ", ".join(pending)}))
+        redo = [ln.line_id for ln in self.lines if ln.status == "redo"]
+        if redo:
+            out.append(("redo", {"lines": ", ".join(redo)}))
+        left = [e for e in self.plan if e["state"] not in ("done", "error")]
+        if left:
+            out.append(("processing", {"n": len(left)}))
+        failed = [e for e in self.plan if e["state"] == "error"]
+        if failed:
+            out.append(("failed", {"n": len(failed), "files": ", ".join(e["name"] for e in failed)}))
+        def unchanged(e: dict[str, Any]) -> bool:
+            try:
+                return _stamp(Path(e["primary"])) == e["source_stamp"]
+            except OSError:  # folder gone
+                return False
+
+        changed = [e["name"] for e in self.plan if e["state"] == "done" and "source_stamp" in e and not unchanged(e)]
+        if changed:
+            out.append(("inputs_changed", {"files": ", ".join(changed)}))
+        if not self.lines:
+            out.append(("no_lines", {}))
+        if not self.reviewer.strip():
+            out.append(("no_reviewer", {}))
+        return out
+
+    def draft_reason_texts(self) -> list[str]:
+        tr = Translator("th")
+        return [tr.t("draft_" + c, **p) for c, p in self.draft_reasons()]
+
+    def input_files(self) -> list[dict[str, Any]]:
+        """Name, size and SHA-256 of every data file the processed lines were read from."""
+        cache = self._hash_cache
+        out = []
+        for e in self.plan:
+            if e["state"] != "done":
+                continue
+            prim = Path(e["primary"])
+            deps = [prim.parent / d["name"] for d in _stamp(prim)] if prim.parent.is_dir() else [prim]
+            for p in dict.fromkeys([prim, *deps, *(Path(c) for c in e.get("companions", []))]):
+                try:
+                    st = p.stat()
+                except OSError:
+                    out.append({"name": p.name, "size": 0, "sha256": "file not found"})
+                    continue
+                key = (str(p), st.st_size, st.st_mtime_ns)
+                if key not in cache:
+                    h = hashlib.sha256()
+                    with p.open("rb") as fh:
+                        for chunk in iter(lambda: fh.read(1 << 20), b""):
+                            h.update(chunk)
+                    cache[key] = h.hexdigest()
+                out.append({"name": p.name, "size": st.st_size, "sha256": cache[key]})
+        return out
+
+    def tracks(self, max_points: int = 500) -> dict[str, list[tuple[float, float]]]:
+        """(lon, lat) along each line with GPS, thinned to at most max_points (ends kept)."""
+        out = {}
+        for ln in self.lines:
+            pos = ln.positions()
+            if pos is None:
+                continue
+            lat, lon = pos
+            idx = np.unique(np.linspace(0, len(lat) - 1, min(len(lat), max_points)).round().astype(int))
+            out[ln.line_id] = [(float(lon[i]), float(lat[i])) for i in idx]
+        return out
+
+    @property
+    def snapshot_dir(self) -> Path:
+        return self.folder / "snapshots"
+
+    def snapshots(self) -> list[dict[str, Any]]:
+        p = self.snapshot_dir / "index.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
+
+    def add_snapshot(self, data: bytes, caption: str = "", source: str = "other") -> dict[str, Any]:
+        """A PNG captured in the app (e.g. the 3D view) to print in the report."""
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("snapshot must be a PNG image")
+        if len(data) > 15 * 1024 * 1024:
+            raise ValueError("snapshot is larger than 15 MB")
+        items = self.snapshots()
+        k = 1
+        while any(x["snapshot_id"] == f"P{k}" for x in items):
+            k += 1
+        self.snapshot_dir.mkdir(exist_ok=True)
+        rec = {"snapshot_id": f"P{k}", "file": f"P{k}.png", "caption": str(caption)[:300],
+               "source": source if source in ("3d", "map", "other") else "other",
+               "created": datetime.now().astimezone().isoformat(timespec="seconds")}
+        (self.snapshot_dir / rec["file"]).write_bytes(data)
+        items.append(rec)
+        (self.snapshot_dir / "index.json").write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+        return rec
+
+    def snapshot_path(self, snapshot_id: str) -> Path:
+        rec = next((x for x in self.snapshots() if x["snapshot_id"] == snapshot_id), None)
+        if rec is None:
+            raise KeyError(snapshot_id)
+        return self.snapshot_dir / rec["file"]
+
+    def delete_snapshot(self, snapshot_id: str) -> None:
+        path = self.snapshot_path(snapshot_id)
+        items = [x for x in self.snapshots() if x["snapshot_id"] != snapshot_id]
+        (self.snapshot_dir / "index.json").write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+        path.unlink(missing_ok=True)
+
+    def signoff(self, survey: SurveyResult | None = None) -> Signoff:
+        """Review record for the report: decisions, input file hashes, overview map and snapshots."""
+        from gpr_analyzer.report.figures import render_overview_map
+
+        survey = survey or self.survey()
+        su = self.info.surface_use
+        tracks = {ln.line_id: ln.positions() for ln in self.lines if ln.positions() is not None}
+        zones = [(z, suggest_action(z, su)) for z in survey.zones if z.review != "rejected" and not z.is_artifact]
+        return Signoff(
+            draft_reasons=self.draft_reasons(), reviewer=self.reviewer,
+            generated_at=datetime.now().astimezone().isoformat(timespec="seconds"), app_version=APP_VERSION,
+            lines=[{"line_id": ln.line_id, "status": ln.status, "status_note": ln.status_note, "sections": ln.sections,
+                    "n_manual": sum(1 for z in ln.zones if z.zone_id not in ln.auto_zones and not ln.excluded(z))}
+                   for ln in self.lines],
+            inputs=self.input_files(), map_png=render_overview_map(tracks, zones),
+            snapshots=[{**x, "png": (self.snapshot_dir / x["file"]).read_bytes()} for x in self.snapshots()
+                       if (self.snapshot_dir / x["file"]).is_file()])
+
+    def report_package(self) -> Path:
+        """ZIP with the PDF/Word report, zones.csv, zones.kmz, survey.json, labels.jsonl and manifest.json."""
+        from gpr_analyzer.report.package import write_package
+
+        out = self.folder / "exports"
+        out.mkdir(exist_ok=True)
+        survey = self.survey()
+        so = self.signoff(survey)
+        extra = {"labels.jsonl": self.labels_path.read_bytes()} if self.labels_path.exists() else {}
+        name = "report-package.zip" if not so.draft_reasons else "report-package-DRAFT.zip"
+        path, _ = write_package(survey, out / name, lang=self.lang, signoff=so, tracks=self.tracks(), extra=extra)
+        return path
 
     def export_kml(self, path: Path) -> Path:
         """Google Earth file in ViewPoint's layout: tracks, field markers (.mrk) and our zones (kml.py)."""
@@ -922,7 +1076,8 @@ class Job:
             "source_folder": self.source_folder, "progress": self.progress_json(),
             "reviewer": self.reviewer, "problems": self.problems, "unassigned": self.unassigned,
             "review": review_counts(zones),
-            "draft": any(z.review == "auto" and not ln.excluded(z) for ln in self.lines for z in ln.zones),
+            "draft": bool(self.draft_reasons()), "draft_reasons": self.draft_reason_texts(),
+            "snapshots": self.snapshots(),
             "lines": [ln.to_json(self.info.surface_use) for ln in self.lines],
             "comparison": {**self.comparison_json(), "tolerance": self.comparison["tolerance"],
                            "features": self.comparison["features"]},

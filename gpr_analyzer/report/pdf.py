@@ -143,8 +143,11 @@ def render_pdf(report: Report, path: str | os.PathLike | None = None, base_size:
             _table(pdf, b, base_size)
         elif isinstance(b, Figure):
             w = usable * b.width
-            # 7 x 3.2 in figure aspect; keep the figure and its caption together
-            h = w * 3.2 / 7.0
+            h = w * b.aspect
+            max_h = (pdf.h - pdf.t_margin - pdf.b_margin) * 0.7  # tall screenshots: leave room for the caption
+            if h > max_h:
+                w, h = max_h / b.aspect, max_h
+            # keep the figure and its caption together
             if pdf.get_y() + h + 12 > pdf.h - pdf.b_margin:
                 pdf.add_page()
             pdf.image(io.BytesIO(b.png), x=pdf.l_margin + (usable - w) / 2, w=w)
