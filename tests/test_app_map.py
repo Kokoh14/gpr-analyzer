@@ -80,3 +80,26 @@ def test_dielectric_points_from_hyperbola_fits(tmp_path):
     assert r.status_code == 200
     l2 = next(x for x in c.get(f"/api/jobs/{jid}/dielectric.json").json() if x["line_id"] == "L2")
     assert len(l2["points"]) == 1
+
+
+def test_gps_qa_flags_weak_fix_length_and_start_gap():
+    step = 1.0 / 111_195  # ~1 m north per fix
+    good = [{"trace": 10 * i, "lat": 13.0 + i * step, "lon": 100.0, "quality": "4"} for i in range(11)]
+    q = geo.gps_qa(good, 101, 0.1)
+    assert q["flags"] == [] and q["length_ratio"] == pytest.approx(1.0, abs=0.02) and q["weak_fix_share"] == 0
+    # late first fix, non-RTK jitter sideways that makes the GPS path longer than the wheel
+    bad = [dict(r, trace=r["trace"] + 5, quality="1", lon=100.0 + (i % 2) * 1e-5) for i, r in enumerate(good[:-1])]
+    q = geo.gps_qa(bad, 101, 0.1)
+    assert {"weak_fix", "length_mismatch", "gap"} <= set(q["flags"]) and q["start_gap_m"] == pytest.approx(0.5)
+    assert geo.gps_qa(good[:1], 101, 0.1) == {"fixes": 1, "flags": []}
+    assert geo.fix_quality(bad, [0, 5, 14, 15, 100]) == ["1"] * 5
+    assert geo.fix_quality(good[:3] + [dict(good[3], quality="5")], [0, 25, 30, 40]) == ["4", "4", "5", "5"]
+
+
+def test_overview_numbers_lines_in_recording_order(tmp_path):
+    c = TestClient(create_app(tmp_path / "jobs", background=False))
+    jid = c.post("/api/demo").json()["job_id"]
+    ov = c.get(f"/api/jobs/{jid}/map.json").json()
+    assert sorted(o["order"] for o in ov) == [1, 2]
+    for o in ov:
+        assert len(o["quality"]) == len(o["points"]) == len(o["traces"]) and o["qa"]["fixes"] >= 2

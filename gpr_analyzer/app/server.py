@@ -13,14 +13,17 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gpr_analyzer.app import folders, geo, scene3d, volume3d
+from gpr_analyzer.app import folders, geo, kml, scene3d, volume3d
 from gpr_analyzer.app.files import safe_name
 from gpr_analyzer.app.compare import TEMPLATE_CSV
 from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
 
 STATIC = Path(__file__).parent / "static"
 MEDIA = {".pdf": "application/pdf", ".html": "text/html; charset=utf-8", ".csv": "text/csv; charset=utf-8",
+         ".cnf": "text/plain; charset=utf-8", ".pobj": "text/plain; charset=utf-8",
+         ".lobj": "text/plain; charset=utf-8", ".zip": "application/zip",
          ".json": "application/json", ".sgy": "application/octet-stream",
+         ".kml": "application/vnd.google-earth.kml+xml", ".kmz": "application/vnd.google-earth.kmz",
          ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 
 
@@ -184,6 +187,16 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         with j.lock:
             return guarded(scene3d.save_layout, j, body)
 
+    @app.post("/api/jobs/{job_id}/thick-slice")
+    def thick_slice(job_id: str, body: dict = Body(...)) -> dict:
+        from gpr_analyzer.app.thick_slice import render
+
+        j = job(job_id)
+        with j.lock:
+            frozen = scene3d.snapshot(j)
+        return guarded(render, frozen, body.get("top_m"), body.get("bottom_m"),
+                       body.get("contrast_db", 40), body.get("frame", "gps"))
+
     @app.post("/api/jobs/{job_id}/info")
     def set_info(job_id: str, body: dict = Body(...)) -> dict:
         j = job(job_id)
@@ -272,6 +285,35 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         return j.to_json()
 
     # ---------------------------------------------------------- comparison with reference software
+    @app.get("/api/jobs/{job_id}/lines/{line_id}/workflow.json")
+    def workflow_export(job_id: str, line_id: str) -> Response:
+        import json
+        from gpr_analyzer.processing.workflows import export_workflow
+
+        j = job(job_id)
+        with j.lock:
+            ln = guarded(j.line, line_id)
+            document = guarded(export_workflow, ln.result, ln.options)
+        return Response(json.dumps(document, ensure_ascii=False, indent=2), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{line_id}-workflow.json"'})
+
+    @app.post("/api/workflows/validate")
+    def workflow_validate(body: dict = Body(...)) -> dict:
+        from gpr_analyzer.processing.workflows import load_workflow
+        from dataclasses import asdict
+
+        opt, tracks = guarded(load_workflow, body)
+        return {"options": asdict(opt), "tracks": sorted(tracks)}
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/workflows/compare")
+    def workflow_compare(job_id: str, line_id: str, body: dict = Body(...)) -> dict:
+        from gpr_analyzer.app.workflows import compare_workflows
+
+        j = job(job_id)
+        with j.lock:
+            raw = guarded(j.line, line_id).raw
+        return guarded(compare_workflows, raw, body.get("left"), body.get("right"))
+
     def ref_route(job_id: str, fn, *a: Any) -> dict:
         j = job(job_id)
         with j.lock:
@@ -297,6 +339,16 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
     def import_picks(job_id: str, line_id: str, file: UploadFile = File(...), source: str = Form("other"),
                      replace: bool = Form(False)) -> dict:
         return ref_route(job_id, Job.import_ref_csv, line_id, file.file.read(), source, replace)
+
+    @app.post("/api/jobs/{job_id}/ref/kml")
+    def import_kml(job_id: str, file: UploadFile = File(...)) -> dict:
+        return ref_route(job_id, Job.import_ref_kml, file.file.read())
+
+    @app.get("/api/jobs/{job_id}/marks.json")
+    def job_marks(job_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            return kml.map_marks(j.lines, j.comparison.get("kml"))
 
     @app.post("/api/jobs/{job_id}/lines/{line_id}/ref/meta/{source}")
     def ref_meta(job_id: str, line_id: str, source: str, body: dict = Body(...)) -> dict:
@@ -358,5 +410,32 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         text = p.read_text(encoding="utf-8") if p.exists() else ""
         return Response(text, media_type="application/x-ndjson",
                         headers={"Content-Disposition": f'attachment; filename="{job_id}_labels.jsonl"'})
+
+    @app.get("/api/jobs/{job_id}/report-package")
+    def report_package(job_id: str) -> FileResponse:
+        """One click: report (PDF + Word), zones CSV + KMZ, survey JSON, labels and a manifest in one ZIP."""
+        j = job(job_id)
+        with j.lock:
+            path = guarded(j.report_package)
+        return FileResponse(path, media_type="application/zip", filename=f"{j.job_id}_{path.name}")
+
+    @app.post("/api/jobs/{job_id}/snapshots")
+    def add_snapshot(job_id: str, file: UploadFile = File(...), caption: str = Form(""),
+                     source: str = Form("other")) -> list[dict]:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.add_snapshot, file.file.read(), caption, source)
+            return j.snapshots()
+
+    @app.get("/api/jobs/{job_id}/snapshots/{snapshot_id}.png")
+    def get_snapshot(job_id: str, snapshot_id: str) -> FileResponse:
+        return FileResponse(guarded(job(job_id).snapshot_path, snapshot_id), media_type="image/png")
+
+    @app.delete("/api/jobs/{job_id}/snapshots/{snapshot_id}")
+    def delete_snapshot(job_id: str, snapshot_id: str) -> list[dict]:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.delete_snapshot, snapshot_id)
+            return j.snapshots()
 
     return app

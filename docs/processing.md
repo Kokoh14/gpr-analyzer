@@ -30,9 +30,36 @@ through `ProcessingOptions`.
 - `envelope`, `energy` – attributes of `analysis`.
 - `display` – AGC. For the eye only; amplitudes are not comparable.
 - `migrated` – only when requested.
+- `viewpoint` – ViewPoint-like screen (`docs/viewpoint-fit.md`). Display only.
+- `autodisplay` – automatic display filters chosen per line (below). Display only;
+  `metadata["display_clip"]` is the colour-scale limit chosen with them.
 
 All tracks share the grid: row 0 = time zero (ground surface), `velocity_m_per_ns` = the
 pipeline's velocity, `metadata["track"]` names the track.
+
+## Automatic display filters (`autodisplay`)
+
+`processing/autodisplay.py`. Neither ViewPoint, Condor nor GPR-SLICE chooses filters
+automatically (`docs/reference-manuals.md`); here every display parameter is measured on the
+line itself and logged as `display_*` steps with the numbers behind it, so the app's recipe
+table shows what was chosen and why.
+
+The chain branches off a copy of the time-zeroed, dewowed data (after step 3). It never
+feeds the analysis track, detection or scoring; `tests/test_autodisplay.py` checks that every
+other track is bit-for-bit the same with and without it.
+
+| Step | Rule | Why |
+|---|---|---|
+| Dead traces | All-zero traces are left out of the background statistics and stay blank | A zero trace would otherwise show the background as a stripe |
+| Band-pass | Power spectra of the signal part (below the direct wave, down to where the 90th-percentile envelope meets 2× the noise floor) and of the noise-only part below it. Pass band = the frequencies around the spectral peak where signal is ≥ 6 dB above noise, searched from 0.3× the centre frequency, never narrower than the signal's half-power band. No noise-only part (reflections reach the end of the window) → 0.4×–2× centre frequency, said so | Removes only what is measured to be noise; a band narrower than the wavelet's own makes it ring |
+| Background removal | Rows where the line's median trace holds ≥ half the energy are the ringing times. On those rows only, sliding medians of whole line, 30, 20, 15, 10, 7.5, 5, 3, 2 m are scored by the banding they leave: per row, the median over 2 m blocks of the block-median energy (so a flat event must cover most of the line to count). The widest window leaving < 5 % (or ≤ 2× the narrowest's) is used | Wide windows keep flat reflectors such as cavity roofs; ringing that changes along the line (surface change) still gets a shorter window. ViewPoint's 1.9 m mean flattens a 7.5 m roof (test) |
+| Gain | Inverse of the 90th-percentile envelope decay, made non-increasing first, held constant below where it meets 2× the noise floor, max 60 dB (`gain_max_db`). One curve for the whole line | Equalises depth without boosting noise; unlike AGC, strengths at the same depth stay comparable along the line, and a strong deep layer is not turned down |
+| Contrast | Clip at the 99th percentile of \|amplitude\| below the direct wave | Only the strongest 1 % saturates |
+
+Limits: the 6 dB, 5 %, 2 m block and 2 m minimum window are fixed rules, not fitted to field
+truth. A flat reflector that runs along most of a line at a ringing time cannot be told apart
+from ringing (the `layers` track keeps it). Not yet checked on the real ImpulseRadar survey:
+`scripts/fit_viewpoint_screens.py` now also scores `autodisplay` against ViewPoint screenshots.
 
 ## Velocity from hyperbolas
 

@@ -545,8 +545,7 @@ $("s3All").addEventListener("click", () => { state.hidden.clear(); document.quer
 $("s3None").addEventListener("click", () => { state.hidden = new Set((state.data?.lines || []).map((l) => l.line_id)); document.querySelectorAll(".s3-line input").forEach((el) => el.checked = false); visibility(); });
 $("s3Full").addEventListener("click", async () => { try { document.fullscreenElement ? await document.exitFullscreen() : await card.requestFullscreen(); resize(); } catch (e) { $("s3Status").textContent = e.message; } });
 $("s3Json").addEventListener("click", () => { if (state.data) download(new Blob([JSON.stringify(state.data, null, 2)], { type: "application/json" }), state.data.grid ? "survey-3d-mode-2.json" : "survey-3d-mode-1.json"); });
-$("s3Png").addEventListener("click", () => {
-  if (!renderer || !root || !state.data) return;
+function annotatedCanvas() {
   renderer.render(scene, camera);
   const canvas = document.createElement("canvas"); canvas.width = renderer.domElement.width; canvas.height = renderer.domElement.height;
   const ctx = canvas.getContext("2d"), ratio = canvas.width / stage.clientWidth;
@@ -566,7 +565,23 @@ $("s3Png").addEventListener("click", () => {
   ctx.fillText(state.data.track === "envelope" || grid ? "-40 dB                 0 dB / line max" : "- amplitude          + amplitude", legendX, legendY + 23);
   ctx.fillText(grid ? "Solid = cell crossed by a scan line; faded = interpolated between two lines; empty = no data. Colour is relative energy, not a probability or confirmed void."
     : "Measured 2D sections; gaps unsurveyed. Colour is not a probability or confirmed void.", 15, stage.clientHeight - 15);
-  canvas.toBlob((blob) => { if (blob) download(blob, grid ? "survey-3d-mode-2.png" : "survey-3d-mode-1.png"); });
+  return canvas;
+}
+$("s3Png").addEventListener("click", () => {
+  if (!renderer || !root || !state.data) return;
+  annotatedCanvas().toBlob((blob) => { if (blob) download(blob, state.data.grid ? "survey-3d-mode-2.png" : "survey-3d-mode-1.png"); });
+});
+$("s3Report").addEventListener("click", () => {
+  if (!renderer || !root || !state.data || !state.job) return;
+  const caption = prompt("คำอธิบายภาพในรายงาน", `มุมมอง 3D · ${state.data.title}`);
+  if (caption === null) return;
+  annotatedCanvas().toBlob(async (blob) => {
+    if (!blob) return;
+    const form = new FormData();
+    form.append("file", blob, "3d.png"); form.append("caption", caption); form.append("source", "3d");
+    try { const list = await request(`/api/jobs/${state.job.job_id}/snapshots`, { method: "POST", body: form }); $("s3Status").textContent = `เก็บภาพไว้ใส่รายงานแล้ว (${list.length} ภาพ)`; }
+    catch (e) { $("s3Status").textContent = e.message; }
+  });
 });
 card.addEventListener("toggle", () => { if (card.open) { state.data ? (resize(), draw()) : load(); } });
 

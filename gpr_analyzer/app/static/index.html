@@ -6,6 +6,7 @@
 <title>GPR Analyzer</title>
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/workflows.css">
 <link rel="stylesheet" href="/static/survey3d.css">
 <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.min.js"}}</script>
 </head>
@@ -16,11 +17,15 @@
   <div class="exports" id="exports" hidden>
     <button class="btn primary" id="summaryBtn" title="ตรวจข้อมูลสำคัญอีกครั้งก่อนออกรายงาน">สรุปก่อนออกรายงาน</button>
     <span class="exp-label">ส่งออก</span>
+    <a class="btn" data-package title="รายงาน PDF + Word, ตารางโซน CSV, แผนที่ KMZ, JSON, labels และ manifest ในไฟล์เดียว">รายงานครบชุด ZIP</a>
     <a class="btn" data-export="report.pdf">PDF</a>
     <a class="btn" data-export="report.docx">Word</a>
     <a class="btn" data-export="report.html">HTML</a>
     <a class="btn ghost" data-export="zones.csv" title="ตารางโซน (Excel อ่านภาษาไทยได้)">CSV โซน</a>
     <a class="btn ghost" data-export="survey.json">JSON</a>
+    <a class="btn ghost" data-export="survey.kmz" title="Google Earth แบบเดียวกับ ViewPoint: แนวสแกน จุดมาร์กภาคสนาม และโซนของเรา พร้อมภาพ">KMZ</a>
+    <a class="btn ghost" data-export="survey.kml" title="Google Earth แบบเดียวกับ ViewPoint (ไม่มีภาพ)">KML</a>
+    <a class="btn ghost" data-export="zones-condor.zip" title=".cnf / .pobj / .lobj + manifest ระดับผิวและโซนที่ข้าม">Condor ZIP</a>
     <a class="btn ghost" id="labelsLink" title="บันทึกการตรวจทานทุกครั้ง สำหรับสอบเทียบภายหลัง">labels</a>
     <a class="btn ghost" data-export="comparison.csv" title="ผลเทียบกับซอฟต์แวร์อ้างอิง ทีละจุด (เปิดด้วย Excel)">เทียบผล CSV</a>
     <button class="btn ghost" id="newJob" title="เริ่มงานใหม่">งานใหม่</button>
@@ -42,6 +47,8 @@
     <div id="browser" class="browser" hidden></div>
     <div id="scanResult" hidden>
       <div id="scanSummary" class="scan-summary"></div>
+      <label class="small">สีแผนที่ <select id="scanMetric"><option value="status">สถานะ</option><option value="gps_points_per_m">GPS points/m (ตามวงล้อ)</option><option value="traces_per_m">traces/m (ตามวงล้อ)</option></select></label>
+      <span id="scanLegend" class="small muted"></span>
       <div id="scanMap" class="scanmap"></div>
       <div class="actions left small">
         <button class="btn ghost small" data-sel="all">เลือกทั้งหมด</button>
@@ -50,7 +57,7 @@
         <span class="muted">ใส่ช่วงระยะ (m) เพื่อประมวลผลเฉพาะช่วงที่สนใจ เว้นว่าง = ทั้งเส้น</span>
       </div>
       <div class="scan-table"><table class="scan"><thead><tr><th></th><th>สถานะ</th><th>เส้น</th><th>trace</th><th>ความยาว</th><th>GPS</th>
-        <th>มาร์ก</th><th>ช่วงที่ประมวลผล (m)</th><th>ข้อสังเกต</th></tr></thead><tbody id="scanRows"></tbody></table></div>
+        <th>points/m · traces/m<br>เวลาเริ่ม–จบ (GPS)</th><th>มาร์ก</th><th>ช่วงที่ประมวลผล (m)</th><th>ข้อสังเกต</th></tr></thead><tbody id="scanRows"></tbody></table></div>
     </div>
   </section>
 
@@ -204,6 +211,7 @@
         <label class="toggle"><input type="checkbox" id="s3Rejected"> รวมโซนที่ปฏิเสธ</label>
         <label class="s3-depth">ระดับตัด <input type="range" id="s3Depth" min="0" max="5" step="0.01" value="1.5"> <output id="s3DepthValue">1.50 m</output></label>
         <button class="btn small" id="s3Png">บันทึก PNG</button>
+        <button class="btn small" id="s3Report" title="เก็บภาพมุมนี้ไว้พิมพ์ในรายงาน (ดู/ลบได้ในหน้าสรุปก่อนออกรายงาน)">ใส่ภาพนี้ในรายงาน</button>
         <button class="btn small" id="s3Json">ส่งออกฉาก JSON</button>
       </div>
       <p class="small muted" id="s3Datum"></p>
@@ -216,6 +224,20 @@
       </details>
     </details>
     <div class="line-status" id="lineStatus"></div>
+    <details class="card" id="thickCard">
+      <summary>Depth-coloured thick slice · ใช้ดูเท่านั้น</summary>
+      <p class="small muted">สี = ความลึกของ envelope ที่แรงที่สุดต่อ cell · ความสว่าง = แอมพลิจูด · ไม่เติมค่าระหว่างแนว · ไม่ใช่ผลจำแนกวัตถุ</p>
+      <div class="cmp-bar">
+        <label>ตื้นสุด (m) <input id="thickTop" type="number" min="0" step="0.1" value="0"></label>
+        <label>ลึกสุด (m) <input id="thickBottom" type="number" min="0" step="0.1" value="2"></label>
+        <label>Contrast (dB) <input id="thickContrast" type="number" min="1" max="100" value="40"></label>
+        <label>พิกัด <select id="thickFrame"><option value="gps">GPS</option><option value="local">Local (กำหนดใน 3D)</option></select></label>
+        <button class="btn" id="thickRender">สร้างภาพ</button>
+      </div>
+      <div id="thickLegend" class="small"></div>
+      <p id="thickStatus" class="small muted">เลือกช่วงความลึก แล้วกดสร้างภาพ</p>
+      <img id="thickImage" alt="Depth-coloured top view; north is up, east is right" hidden style="width:100%;height:420px;object-fit:contain;image-rendering:pixelated;background:#202832">
+    </details>
 
     <details class="card mapcard" id="mapCard" open>
       <summary>แผนที่ (มุมมองจากด้านบน) <span class="muted small" id="mapNote"></span></summary>
@@ -225,6 +247,8 @@
         <label>สี <select id="sliceCmap"><option value="jet">Jet</option><option value="hot">Hot</option><option value="grey">ขาวดำ</option></select></label>
         <label class="toggle"><input type="checkbox" id="mapZones" checked> โซน</label>
         <label class="toggle"><input type="checkbox" id="mapAll" checked> ทุกเส้น</label>
+        <label>สีเส้น <select id="trackColour"><option value="green">เขียว (แบบ ViewPoint)</option><option value="quality">คุณภาพ GPS</option><option value="order">ลำดับเวลาเก็บ</option></select></label>
+        <label class="toggle"><input type="checkbox" id="mapLabels" checked> เลขเส้น/ลูกศรทิศทาง</label>
         <button class="btn ghost small" id="mapFit" title="ซูมให้เห็นเส้นนี้ทั้งเส้น">⤢ พอดีเส้น</button>
       </div>
       <div class="mapwrap"><div id="map"></div><div class="map-msg" id="mapMsg" hidden></div>
@@ -232,6 +256,8 @@
           <input type="range" id="sliceDepth" min="0" max="39" value="6" aria-label="ความลึกจากผิวดิน"><b id="sliceDepthLbl"></b></div></div>
       <div class="map-legend small muted"><span id="sliceLegend"></span> <span id="mapHelp"></span>
         · คลิกบนแผนที่เพื่อไปยังตำแหน่งนั้นในภาพตัดขวาง · คลิกบนภาพตัดขวางเพื่อเลือกความลึก</div>
+      <div class="map-qa small" id="mapQa"></div>
+      <div class="map-coord small muted" id="mapCoord"></div>
     </details>
 
     <div class="zoombar">
@@ -261,6 +287,8 @@
         <button class="btn" id="refDrawBtn" title="ลากกรอบบนภาพของเราตรงที่ซอฟต์แวร์อ้างอิงมาร์กไว้">＋ วาดจุดอ้างอิง</button>
         <input type="file" id="refImgInput" accept="image/*" multiple hidden>
         <input type="file" id="refCsvInput" accept=".csv,.txt,.tsv" hidden>
+        <button class="btn" id="refKmlBtn" title="จุดมาร์กใน KML/KMZ ที่ ViewPoint ส่งออก ใช้เป็นเฉลยของทุกเส้นในงานนี้ (แทนที่การนำเข้า KML ครั้งก่อน)">นำเข้าเฉลย KML/KMZ</button>
+        <input type="file" id="refKmlInput" accept=".kml,.kmz" hidden>
       </div>
       <div id="cmpSummary" class="cmp-summary"></div>
       <div id="refImages" class="ref-images"></div>
@@ -306,6 +334,26 @@
       <table class="cmp"><thead><tr><th>ฟีเจอร์</th><th>เทียบกับ</th><th>โปรแกรมนี้</th><th>หมายเหตุ</th><th></th></tr></thead><tbody id="featRows"></tbody></table>
       <div class="actions left"><button class="btn ghost" id="featAdd">＋ เพิ่มแถว</button><button class="btn primary" id="featSave">บันทึกคะแนน</button>
         <a class="btn ghost" data-export="features.csv">ส่งออก CSV</a></div>
+    </details>
+
+    <details class="card" id="workflowCard">
+      <summary>Workflow · บันทึก นำกลับมาใช้ และเทียบ A/B</summary>
+      <p class="small muted">ไฟล์ JSON เก็บ ProcessingOptions และประวัติค่าที่ใช้จริง ค่าอัตโนมัติจะคำนวณใหม่ตามข้อมูล · การเทียบไม่เปลี่ยนผลที่บันทึกไว้</p>
+      <div class="cmp-bar"><a class="btn" id="workflowExport">บันทึก workflow เส้นปัจจุบัน</a></div>
+      <div class="workflow-grid">
+        <div><b>A</b> <span id="workflowNameA">ค่าปัจจุบันของเส้น</span><br>
+          <button class="btn small" id="workflowLoadA">โหลดไฟล์ A</button><button class="btn small" id="workflowApplyA">ใช้ A กับเส้นนี้</button>
+          <input id="workflowFileA" type="file" accept=".json" hidden></div>
+        <div><b>B</b> <span id="workflowNameB">ยังไม่เลือกไฟล์</span><br>
+          <button class="btn small" id="workflowLoadB">โหลดไฟล์ B</button><button class="btn small" id="workflowApplyB">ใช้ B กับเส้นนี้</button>
+          <input id="workflowFileB" type="file" accept=".json" hidden></div>
+      </div>
+      <button class="btn primary" id="workflowCompare">เทียบ A/B บนเส้นปัจจุบัน</button>
+      <p class="small muted" id="workflowStatus"></p>
+      <div id="workflowViews" class="workflow-grid" hidden>
+        <div><img id="workflowImageA" alt="Workflow A analysis"><details><summary>พารามิเตอร์ A</summary><pre id="workflowLogA" class="logbox"></pre></details></div>
+        <div><img id="workflowImageB" alt="Workflow B analysis"><details><summary>พารามิเตอร์ B</summary><pre id="workflowLogB" class="logbox"></pre></details></div>
+      </div>
     </details>
 
     <details class="recipe card" id="recipe">
@@ -354,13 +402,16 @@
 <main id="summaryView" class="summary" hidden>
   <div class="actions left"><button class="btn" id="summaryBack">← กลับไปตรวจผล</button><span class="spacer"></span>
     <span class="muted small">ออกรายงาน:</span>
-    <a class="btn primary" data-export="report.pdf">PDF</a><a class="btn" data-export="report.docx">Word</a><a class="btn" data-export="report.html">HTML</a></div>
+    <a class="btn primary" data-package title="รายงาน PDF + Word, ตารางโซน CSV, แผนที่ KMZ, JSON, labels และ manifest ในไฟล์เดียว">รายงานครบชุด ZIP</a>
+    <a class="btn" data-export="report.pdf">PDF</a><a class="btn" data-export="report.docx">Word</a><a class="btn" data-export="report.html">HTML</a></div>
   <div id="summaryBody"></div>
 </main>
 
 <div id="toast" class="toast" hidden></div>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/workflows.js"></script>
 <script type="module" src="/static/survey3d.js"></script>
+<script src="/static/thick-slice.js"></script>
 </body>
 </html>

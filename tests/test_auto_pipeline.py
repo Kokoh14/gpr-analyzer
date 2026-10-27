@@ -10,6 +10,7 @@ from gpr_analyzer.synthetic import Layer, PointTarget, make_scene
 STEPS = [
     "center_frequency", "dewow", "time_zero", "bandpass", "background_removal",
     "gain_sec", "velocity", "envelope", "agc", "viewpoint_display",
+    "display_bandpass", "display_background", "display_gain", "display_contrast",
 ]
 
 
@@ -148,7 +149,7 @@ def test_auto_process_hook_for_report(scene):
     assert out.metadata["velocity_source"] == "hyperbola_fit"
     assert out.metadata["processing"] == steps
     # The report hook requests the analysis track only; do not claim display/attribute steps ran.
-    assert [s["name"] for s in steps] == STEPS[:-3]
+    assert [s["name"] for s in steps] == STEPS[:7]
     for s in steps:
         assert set(s) == {"name", "params", "auto"} and s["auto"] is True and s["params"]["reason"]
     json.dumps(steps)  # report serialises them

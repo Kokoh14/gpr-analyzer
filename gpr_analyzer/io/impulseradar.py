@@ -160,12 +160,17 @@ def read_cor(path: str | Path) -> list[dict]:
             trace = int(float(parts[0]))
             lat = float(parts[3]) * (-1 if parts[4].upper() == "S" else 1)
             lon = float(parts[5]) * (-1 if parts[6].upper() == "W" else 1)
-        except ValueError:
+        except (ValueError, OverflowError):
             continue
         row = {"trace": trace, "date": parts[1], "time": parts[2], "lat": lat, "lon": lon}
         if len(parts) > 7:
             try:
                 row["elevation"] = float(parts[7])
+            except ValueError:
+                pass
+        if len(parts) > 9:
+            try:
+                row["quality"] = int(parts[9])
             except ValueError:
                 pass
         rows.append(row)
@@ -175,8 +180,9 @@ def read_cor(path: str | Path) -> list[dict]:
 def read_mrk(path: str | Path) -> list[dict]:
     """Read a ViewPoint .mrk marker file (header line 'HEADER VERSION:300', then one marker per line).
 
-    Tab-separated: trace, sample (in this channel's samples), type, colour, status, (empty),
-    lat, N/S, lon, E/W, elevation, 'M', quality, ... , id. Position fields are optional.
+    Tab-separated: trace, sample (in this channel's samples), type (colour standard, e.g. APWA), colour,
+    status (colour index in the standard), (empty), lat, N/S, lon, E/W, elevation, 'M', quality, ... , id.
+    Position fields are optional.
     Files whose first line is not a marker (the header) are handled; junk lines are skipped.
     """
     rows = []
@@ -200,6 +206,13 @@ def read_mrk(path: str | Path) -> list[dict]:
                 row["lon"] = float(parts[8]) * (-1 if parts[9].upper() == "W" else 1)
             except ValueError:
                 pass
+        if len(parts) > 12:
+            try:
+                row["elevation"] = float(parts[10])
+            except ValueError:
+                pass
+            if parts[12].strip():
+                row["quality"] = parts[12].strip()  # GPS fix quality, shown as "Status" in ViewPoint's KML
         if len(parts) > 1 and len(parts[-1]) >= 32 and parts[-1].count("-") == 4:
             row["id"] = parts[-1]
         rows.append(row)

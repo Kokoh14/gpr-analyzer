@@ -8,6 +8,7 @@ records are the training/calibration data the project plans to collect.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import pickle
@@ -24,24 +25,26 @@ from weakref import WeakValueDictionary
 import numpy as np
 
 from gpr_analyzer.app import compare as cmp
-from gpr_analyzer.app import geo
+from gpr_analyzer.app import geo, kml
 from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
 from gpr_analyzer.core import Radargram, crop_to_range
 from gpr_analyzer.detect import analyze_line, to_report_records
+from gpr_analyzer.detect import crossline
 from gpr_analyzer.io import read as read_file
 from gpr_analyzer.processing import ProcessingOptions, ProcessingResult, run_pipeline
 from gpr_analyzer.report import write_report
+from gpr_analyzer.report.compose import Signoff
+from gpr_analyzer.report.i18n import Translator
 from gpr_analyzer.report.rules import suggest_action
 from gpr_analyzer.report.schema import (ACTION_LEVELS, CONFIDENCE_LEVELS, SURFACE_USES, ZONE_TYPES, ArtifactRegion,
                                         Evidence, LineResult, ProcessingStep, SurveyInfo, SurveyResult, Zone)
 
 APP_VERSION = "0.1"
-VIEWS = ("grey", "high_gain", "envelope", "viewpoint")
+VIEWS = ("grey", "high_gain", "envelope", "viewpoint", "autodisplay")
 EDITABLE = ("trace_start", "trace_end", "time_top_ns", "time_bottom_ns", "suspected_type", "confidence", "action",
             "note")
-# Processing options the screen exposes; everything else stays automatic.
-OPTION_FIELDS = ("velocity_m_per_ns", "center_freq_mhz", "band_mhz", "background", "background_window_m",
-                 "gain_max_db", "agc_window_ns", "time_zero", "migration")
+# All processing fields must survive imported workflows and checkpoints.
+OPTION_FIELDS = tuple(f.name for f in fields(ProcessingOptions))
 
 
 def _now() -> str:
@@ -50,29 +53,29 @@ def _now() -> str:
 
 def parse_options(d: dict[str, Any] | None) -> ProcessingOptions:
     """ProcessingOptions from the form; blank values mean 'automatic'."""
-    opt = ProcessingOptions()
-    for k, v in (d or {}).items():
-        if k not in OPTION_FIELDS or v in (None, "", []):
+    from gpr_analyzer.processing.workflows import options_from_dict
+
+    if d is not None and not isinstance(d, dict):
+        raise ValueError("options must be an object")
+    clean = {}
+    strings = {"background", "background_statistic", "time_zero_source", "migration"}
+    for key, value in (d or {}).items():
+        if value in (None, "", []):
             continue
-        if k == "band_mhz":
-            lo, hi = (float(x) for x in v)
-            if not 0 < lo < hi:
-                raise ValueError("band_mhz needs 0 < low < high")
-            v = (lo, hi)
-        elif k == "time_zero":
-            v = bool(v)
-        elif k in ("background", "migration"):
-            v = str(v)
-        else:
-            v = float(v)
-            if v <= 0:
-                raise ValueError(f"{k} must be positive")
-        setattr(opt, k, v)
-    if opt.background not in ("sliding", "global", "none"):
-        raise ValueError("background must be sliding, global or none")
-    if opt.migration not in ("none", "stolt", "kirchhoff"):
-        raise ValueError("migration must be none, stolt or kirchhoff")
-    return opt
+        if key not in OPTION_FIELDS:
+            raise ValueError(f"unknown processing option: {key}")
+        if key == "band_mhz":
+            try:
+                value = [float(x) for x in value]
+            except (TypeError, ValueError):
+                raise ValueError("band_mhz needs [low, high]") from None
+        elif key not in strings | {"time_zero", "estimate_velocity"}:
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                raise ValueError(f"invalid {key}") from None
+        clean[key] = value
+    return options_from_dict(clean)
 
 
 def options_dict(opt: ProcessingOptions) -> dict[str, Any]:
@@ -104,7 +107,7 @@ class LineState:
 
     # ------------------------------------------------------------------ processing
     def process(self, progress: Callable[[str], None] | None = None) -> None:
-        res = run_pipeline(self.raw, self.options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint"})
+        res = run_pipeline(self.raw, self.options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay"})
         if progress:
             progress("detect")
         det = analyze_line(res.analysis, velocity_m_per_ns=res.velocity_m_per_ns,
@@ -143,7 +146,7 @@ class LineState:
 
     # ------------------------------------------------------------------ images
     def views(self) -> list[str]:
-        return [v for v in VIEWS if v != "viewpoint" or self.result.viewpoint is not None]
+        return [v for v in VIEWS if v not in ("viewpoint", "autodisplay") or getattr(self.result, v) is not None]
 
     def positions(self) -> tuple[np.ndarray, np.ndarray] | None:
         """(lat, lon) per trace from the .cor GPS, or None."""
@@ -159,8 +162,23 @@ class LineState:
         lat, lon = pos
         n = len(lat) - 1
         i0, i1 = min(max(z.trace_start, 0), n), min(max(z.trace_end, 0), n)
-        return _replace(z, coord_start=(float(lon[i0]), float(lat[i0])), coord_end=(float(lon[i1]), float(lat[i1])),
-                        datum="WGS84")
+        out = _replace(z, coord_start=(float(lon[i0]), float(lat[i0])), coord_end=(float(lon[i1]), float(lat[i1])),
+                       datum="WGS84")
+        # Altitude is needed for Condor's GPS Z. Never substitute depth or zero for a missing altitude.
+        heights = {}
+        for g in self.raw.metadata.get("gps") or []:
+            try:
+                tr, height = float(g["trace"]), float(g["elevation"])
+                if np.isfinite([tr, height]).all() and g.get("quality") != 0:
+                    heights.setdefault(tr, height)
+            except (KeyError, TypeError, ValueError):
+                continue
+        if len(heights) >= 2:
+            traces = sorted(heights)
+            if traces[0] <= i0 <= i1 <= traces[-1]:
+                out = _replace(out, surface_elevation_start_m=float(np.interp(i0, traces, [heights[t] for t in traces])),
+                               surface_elevation_end_m=float(np.interp(i1, traces, [heights[t] for t in traces])))
+        return out
 
     def png(self, view: str) -> bytes:
         if view not in self.views():
@@ -240,6 +258,10 @@ def render_png(res: ProcessingResult, view: str) -> bytes:
             d = np.vstack([d, np.zeros((n - d.shape[0], d.shape[1]), dtype=d.dtype)])
         c = float(np.percentile(np.abs(d), 98.0)) or 1.0
         img, cmap, lo, hi = d, "gray", -c, c
+    elif view == "autodisplay":
+        d = res.autodisplay.data
+        c = res.autodisplay.metadata["display_clip"]
+        img, cmap, lo, hi = d, "gray", -c, c
     elif view == "high_gain":
         d = res.display.data
         c = float(np.percentile(np.abs(d), 95.0)) or 1.0
@@ -273,6 +295,7 @@ class Job:
     _thread: threading.Thread | None = field(default=None, repr=False)
     _log_tail: list[str] = field(default_factory=list, repr=False)
     _pending_lines: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+    _hash_cache: dict[tuple, str] = field(default_factory=dict, repr=False)  # input file SHA-256 by (path, size, mtime)
 
     @property
     def upload_dir(self) -> Path:
@@ -349,6 +372,7 @@ class Job:
         t0 = time.monotonic()
         for e in todo:
             self._process_entry(e)
+        self.apply_cross_line()
         with self.lock:
             self.progress.update(state="done", finished=_now())
             if not self.lines and not self.problems:
@@ -434,6 +458,7 @@ class Job:
                         "companions": ln.companions, "options": ln.options, "result": slim,
                         "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones,
                         "artifact_regions": [asdict(r) for r in ln.artifact_regions], "trace_offset": ln.trace_offset}}
+        e["source_stamp"] = rec["source_stamp"]  # the report checks the files are still the ones processed
         tmp = d.with_suffix(".tmp")
         with tmp.open("wb") as f:
             pickle.dump(rec, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -541,9 +566,15 @@ class Job:
         ln = self.line(line_id)
         opt = parse_options(options)
         old, old_auto = list(ln.zones), set(ln.auto_zones)
+        previous = ln.options
         ln.options = opt
-        ln.process()
+        try:
+            ln.process()
+        except Exception:
+            ln.options = previous
+            raise
         carried, dropped = carry_reviews(ln, old, old_auto)
+        self.apply_cross_line()
         if ln.status == "redo":
             ln.status = "pending"
         e = next((e for e in self.plan if ln.line_id in e["line_ids"]), None)
@@ -554,6 +585,49 @@ class Job:
         self._label("reprocess", ln, None, {"reviewed_zones_discarded": dropped},
                     {"options": options_dict(opt), "reviews_carried": carried})
         return ln
+
+    def apply_cross_line(self) -> int:
+        """Check unreviewed suspicious zones against the neighbouring lines (detect.crossline).
+
+        Adds one cross-line reason to each and lowers void-like / scattered / unknown zones by one level
+        when a neighbour passes over them without showing anything. Repeatable: the reason from an earlier
+        run is replaced and the level it changed is put back first. Reviewed zones are left as they are.
+        Returns the number of zones whose level changed.
+        """
+        with self.lock:
+            lines = list(self.lines)
+        pos = [(ln, ln.positions()) for ln in lines if ln.result is not None]
+        origin = next(((p[0][0], p[1][0]) for _, p in pos if p is not None), None)
+        tracks = []
+        for ln, p in pos:
+            a = ln.analysis
+            xy = crossline.local_xy(p[0], p[1], *origin) if p is not None else None
+            ok = xy is not None and crossline.gps_length_ok(xy, a.n_traces * (a.dx_m or 0) or None,
+                                                            crossline.CrossLineParams().max_length_mismatch)
+            ln.zones = [_without_cross_line(z) if z.review == "auto" else z for z in ln.zones]
+            tracks.append(crossline.LineTrack(
+                line_id=ln.line_id, source=ln.source_file, channel=ln.channel, xy=xy, dx_m=a.dx_m, gps_ok=ok,
+                zones=[z for z in ln.zones if z.review != "rejected" and not ln.excluded(z)],
+                excluded=[(sc["trace_start"], sc["trace_end"]) for sc in ln.sections]))
+        results = crossline.check_lines(tracks)
+        changed = 0
+        for ln, _ in pos:
+            new = []
+            for z in ln.zones:
+                r = results.get((ln.line_id, z.zone_id))
+                if r is not None and z.review == "auto":
+                    ev = {"kind": r.kind, "code": r.code, "text": r.text_th,
+                          "params": {"text_en": r.text_en, "base_confidence": z.confidence}}
+                    z = _replace(z, evidence=[e.__dict__ for e in z.evidence] + [ev],
+                                 confidence=r.new_confidence or z.confidence)
+                    changed += r.new_confidence is not None
+                    ln.auto_zones[z.zone_id] = z.to_dict()
+                new.append(z)
+            ln.zones = new
+            ln._cache.pop("report_figures", None)
+        if changed:
+            self.log(f"ตรวจข้ามแนวด้วย GPS: ลดระดับ {changed} โซนที่แนวข้างเคียงผ่านแต่ไม่พบ")
+        return changed
 
     # ------------------------------------------------------------------ line-level review
     def add_section(self, line_id: str, d: dict[str, Any]) -> dict[str, Any]:
@@ -644,6 +718,8 @@ class Job:
         zs = [z for ln in self.lines for z in ln.zones if not ln.excluded(z)]
         return {"info": asdict(self.info), "lang": self.lang, "reviewer": self.reviewer, "lines": lines,
                 "findings": findings, "warnings": warn, "ready": not warn,
+                "final": not self.draft_reasons(), "draft_reasons": self.draft_reason_texts(),
+                "snapshots": self.snapshots(),
                 "totals": {"lines": len(self.lines), "approved": sum(ln.status == "approved" for ln in self.lines),
                            "length_m": round(sum(x["length_m"] or 0 for x in lines), 1),
                            "zones": len(zs), "review": review_counts(zs),
@@ -765,10 +841,211 @@ class Job:
         """Write report.pdf/.docx/.html, zones.csv or survey.json into the job folder."""
         out = self.folder / "exports"
         out.mkdir(exist_ok=True)
-        allowed = {"report.pdf", "report.docx", "report.html", "zones.csv", "survey.json"}
+        allowed = {"report.pdf", "report.docx", "report.html", "zones.csv", "survey.json",
+                   "zones.cnf", "zones.pobj", "zones.lobj", "zones-condor.zip"}
+        if name in ("survey.kml", "survey.kmz"):
+            return self.export_kml(out / name)
         if name not in allowed:
             raise KeyError(name)
-        return write_report(self.survey(), out / name, lang=self.lang)
+        if name == "zones-condor.zip":
+            from gpr_analyzer.report.exports import condor_zip
+            return condor_zip(self.survey(), out / name)
+        survey = self.survey()
+        return write_report(survey, out / name, lang=self.lang,
+                            signoff=self.signoff(survey) if name.startswith("report.") else None)
+
+    # ------------------------------------------------------------------ confirmed report
+    def draft_reasons(self) -> list[tuple[str, dict[str, Any]]]:
+        """Why the report would still be a draft; empty = every result was confirmed by a person."""
+        out: list[tuple[str, dict[str, Any]]] = []
+        auto = [(ln.line_id, z) for ln in self.lines for z in ln.zones if z.review == "auto" and not ln.excluded(z)]
+        if auto:
+            out.append(("unreviewed", {"n": len(auto), "lines": ", ".join(dict.fromkeys(lid for lid, _ in auto))}))
+        pending = [ln.line_id for ln in self.lines if ln.status == "pending"]
+        if pending:
+            out.append(("not_approved", {"lines": ", ".join(pending)}))
+        redo = [ln.line_id for ln in self.lines if ln.status == "redo"]
+        if redo:
+            out.append(("redo", {"lines": ", ".join(redo)}))
+        left = [e for e in self.plan if e["state"] not in ("done", "error")]
+        if left:
+            out.append(("processing", {"n": len(left)}))
+        failed = [e for e in self.plan if e["state"] == "error"]
+        if failed:
+            out.append(("failed", {"n": len(failed), "files": ", ".join(e["name"] for e in failed)}))
+        def unchanged(e: dict[str, Any]) -> bool:
+            try:
+                return _stamp(Path(e["primary"])) == e["source_stamp"]
+            except OSError:  # folder gone
+                return False
+
+        changed = [e["name"] for e in self.plan if e["state"] == "done" and "source_stamp" in e and not unchanged(e)]
+        if changed:
+            out.append(("inputs_changed", {"files": ", ".join(changed)}))
+        if not self.lines:
+            out.append(("no_lines", {}))
+        if not self.reviewer.strip():
+            out.append(("no_reviewer", {}))
+        return out
+
+    def draft_reason_texts(self) -> list[str]:
+        tr = Translator("th")
+        return [tr.t("draft_" + c, **p) for c, p in self.draft_reasons()]
+
+    def input_files(self) -> list[dict[str, Any]]:
+        """Name, size and SHA-256 of every data file the processed lines were read from."""
+        cache = self._hash_cache
+        out = []
+        for e in self.plan:
+            if e["state"] != "done":
+                continue
+            prim = Path(e["primary"])
+            deps = [prim.parent / d["name"] for d in _stamp(prim)] if prim.parent.is_dir() else [prim]
+            for p in dict.fromkeys([prim, *deps, *(Path(c) for c in e.get("companions", []))]):
+                try:
+                    st = p.stat()
+                except OSError:
+                    out.append({"name": p.name, "size": 0, "sha256": "file not found"})
+                    continue
+                key = (str(p), st.st_size, st.st_mtime_ns)
+                if key not in cache:
+                    h = hashlib.sha256()
+                    with p.open("rb") as fh:
+                        for chunk in iter(lambda: fh.read(1 << 20), b""):
+                            h.update(chunk)
+                    cache[key] = h.hexdigest()
+                out.append({"name": p.name, "size": st.st_size, "sha256": cache[key]})
+        return out
+
+    def tracks(self, max_points: int = 500) -> dict[str, list[tuple[float, float]]]:
+        """(lon, lat) along each line with GPS, thinned to at most max_points (ends kept)."""
+        out = {}
+        for ln in self.lines:
+            pos = ln.positions()
+            if pos is None:
+                continue
+            lat, lon = pos
+            idx = np.unique(np.linspace(0, len(lat) - 1, min(len(lat), max_points)).round().astype(int))
+            out[ln.line_id] = [(float(lon[i]), float(lat[i])) for i in idx]
+        return out
+
+    @property
+    def snapshot_dir(self) -> Path:
+        return self.folder / "snapshots"
+
+    def snapshots(self) -> list[dict[str, Any]]:
+        p = self.snapshot_dir / "index.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else []
+
+    def add_snapshot(self, data: bytes, caption: str = "", source: str = "other") -> dict[str, Any]:
+        """A PNG captured in the app (e.g. the 3D view) to print in the report."""
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("snapshot must be a PNG image")
+        if len(data) > 15 * 1024 * 1024:
+            raise ValueError("snapshot is larger than 15 MB")
+        items = self.snapshots()
+        k = 1
+        while any(x["snapshot_id"] == f"P{k}" for x in items):
+            k += 1
+        self.snapshot_dir.mkdir(exist_ok=True)
+        rec = {"snapshot_id": f"P{k}", "file": f"P{k}.png", "caption": str(caption)[:300],
+               "source": source if source in ("3d", "map", "other") else "other",
+               "created": datetime.now().astimezone().isoformat(timespec="seconds")}
+        (self.snapshot_dir / rec["file"]).write_bytes(data)
+        items.append(rec)
+        (self.snapshot_dir / "index.json").write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+        return rec
+
+    def snapshot_path(self, snapshot_id: str) -> Path:
+        rec = next((x for x in self.snapshots() if x["snapshot_id"] == snapshot_id), None)
+        if rec is None:
+            raise KeyError(snapshot_id)
+        return self.snapshot_dir / rec["file"]
+
+    def delete_snapshot(self, snapshot_id: str) -> None:
+        path = self.snapshot_path(snapshot_id)
+        items = [x for x in self.snapshots() if x["snapshot_id"] != snapshot_id]
+        (self.snapshot_dir / "index.json").write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+        path.unlink(missing_ok=True)
+
+    def signoff(self, survey: SurveyResult | None = None) -> Signoff:
+        """Review record for the report: decisions, input file hashes, overview map and snapshots."""
+        from gpr_analyzer.report.figures import render_overview_map
+
+        survey = survey or self.survey()
+        su = self.info.surface_use
+        tracks = {ln.line_id: ln.positions() for ln in self.lines if ln.positions() is not None}
+        zones = [(z, suggest_action(z, su)) for z in survey.zones if z.review != "rejected" and not z.is_artifact]
+        return Signoff(
+            draft_reasons=self.draft_reasons(), reviewer=self.reviewer,
+            generated_at=datetime.now().astimezone().isoformat(timespec="seconds"), app_version=APP_VERSION,
+            lines=[{"line_id": ln.line_id, "status": ln.status, "status_note": ln.status_note, "sections": ln.sections,
+                    "n_manual": sum(1 for z in ln.zones if z.zone_id not in ln.auto_zones and not ln.excluded(z))}
+                   for ln in self.lines],
+            inputs=self.input_files(), map_png=render_overview_map(tracks, zones),
+            snapshots=[{**x, "png": (self.snapshot_dir / x["file"]).read_bytes()} for x in self.snapshots()
+                       if (self.snapshot_dir / x["file"]).is_file()])
+
+    def report_package(self) -> Path:
+        """ZIP with the PDF/Word report, zones.csv, zones.kmz, survey.json, labels.jsonl and manifest.json."""
+        from gpr_analyzer.report.package import write_package
+
+        out = self.folder / "exports"
+        out.mkdir(exist_ok=True)
+        survey = self.survey()
+        so = self.signoff(survey)
+        extra = {"labels.jsonl": self.labels_path.read_bytes()} if self.labels_path.exists() else {}
+        name = "report-package.zip" if not so.draft_reasons else "report-package-DRAFT.zip"
+        path, _ = write_package(survey, out / name, lang=self.lang, signoff=so, tracks=self.tracks(), extra=extra)
+        return path
+
+    def export_kml(self, path: Path) -> Path:
+        """Google Earth file in ViewPoint's layout: tracks, field markers (.mrk) and our zones (kml.py)."""
+        profiles, shots = kml.job_profiles(self.lines)
+        text = kml.build_kml(profiles)
+        if path.suffix == ".kml":
+            path.write_bytes(text.encode("utf-8"))
+        else:
+            images = {img: kml.snapshot_jpg(*args) for img, args in shots.items()}
+            stem = safe_name(self.info.project or self.job_id)
+            path.write_bytes(kml.build_kmz(f"{stem}.kml", text, images, kml.logo_png()))
+        return path
+
+    def import_ref_kml(self, data: bytes, replace: bool = True) -> dict[str, Any]:
+        """ViewPoint KML/KMZ markers as reference picks (the "answer key"), on every line of the same profile.
+
+        A marker goes to the trace nearest its position on our GPS track and to its target depth.
+        Picks from an earlier KML import are replaced. The profiles are kept for the map.
+        """
+        profiles = kml.parse(data)
+        by_name = {p.name: p for p in profiles}
+        added, unmatched = 0, []
+        for ln in self.lines:
+            p = by_name.get(kml.profile_name(ln.source_file))
+            ls = cmp.line_state(self.comparison, ln.line_id)
+            if replace:
+                ls["picks"] = [q for q in ls["picks"] if not q["note"].startswith(kml.KML_NOTE)]
+            if p is None:
+                continue
+            pos = ln.positions()
+            for m in p.marks:
+                if pos is None or m.depth_m is None:
+                    unmatched.append(f"{ln.line_id} {m.name}")
+                    continue
+                c = kml.mark_trace(m, pos, ln.raw.metadata.get("markers"))
+                pick = cmp.clean_pick({"source": "viewpoint", "x_start": c, "x_unit": "trace", "top": m.depth_m,
+                                       "y_unit": "m", "label": m.name, "ref_type": m.information or m.type_name,
+                                       "note": f"{kml.KML_NOTE} {m.type_name} {m.standard}:{m.index}".strip()},
+                                      cmp.next_ref_id(ls["picks"]))
+                ls["picks"].append(pick)
+                added += 1
+        self.comparison["kml"] = [{"name": p.name, "track": p.track, "marks": [
+            {"name": m.name, "lat": m.lat, "lon": m.lon, "depth_m": m.depth_m, "type": m.type_name,
+             "information": m.information, "colour": kml.mark_colour(m)} for m in p.marks]} for p in profiles]
+        self.save()
+        lines_hit = {kml.profile_name(ln.source_file) for ln in self.lines}
+        return {"added": added, "profiles": len(profiles), "marks": sum(len(p.marks) for p in profiles),
+                "profiles_not_in_job": sorted(set(by_name) - lines_hit), "unmatched": unmatched}
 
     def export_line(self, line_id: str, fmt: str) -> Path:
         """Processed (analysis-track) data of one line as SEG-Y or CSV."""
@@ -799,7 +1076,8 @@ class Job:
             "source_folder": self.source_folder, "progress": self.progress_json(),
             "reviewer": self.reviewer, "problems": self.problems, "unassigned": self.unassigned,
             "review": review_counts(zones),
-            "draft": any(z.review == "auto" and not ln.excluded(z) for ln in self.lines for z in ln.zones),
+            "draft": bool(self.draft_reasons()), "draft_reasons": self.draft_reason_texts(),
+            "snapshots": self.snapshots(),
             "lines": [ln.to_json(self.info.surface_use) for ln in self.lines],
             "comparison": {**self.comparison_json(), "tolerance": self.comparison["tolerance"],
                            "features": self.comparison["features"]},
@@ -1078,7 +1356,9 @@ def _line_order(ln: LineState) -> tuple[int, str]:
 STEP_TH = {"read": "อ่านไฟล์", "center_frequency": "หาความถี่", "dewow": "Dewow", "time_zero": "Time-zero",
            "bandpass": "Bandpass", "background_removal": "ลบพื้นหลัง", "gain": "Gain", "velocity": "หาความเร็วคลื่น",
            "migration": "Migration", "envelope": "Envelope", "agc": "AGC", "viewpoint_display": "ภาพแบบ ViewPoint",
-           "detect": "ค้นหาโซนผิดปกติ", "checkpoint": "บันทึก checkpoint"}
+           "display_qc": "ตรวจ trace (แสดงผล)", "display_bandpass": "Bandpass อัตโนมัติ (แสดงผล)",
+           "display_background": "ลบพื้นหลังอัตโนมัติ (แสดงผล)", "display_gain": "Gain อัตโนมัติ (แสดงผล)",
+           "display_contrast": "Contrast อัตโนมัติ (แสดงผล)", "detect": "ค้นหาโซนผิดปกติ", "checkpoint": "บันทึก checkpoint"}
 TYPE_TH = {"void_like": "คล้ายโพรง", "pipe_point": "ท่อ/วัตถุจุด", "layer": "ชั้นดิน", "scattered": "สะท้อนกระจัดกระจาย",
            "artifact": "artifact", "unknown": "ไม่ระบุ"}
 CONF_TH = {"high": "สูง", "medium": "กลาง", "low": "ต่ำ", "confirmed": "ยืนยัน"}
@@ -1106,6 +1386,16 @@ def line_summary(ln: LineState) -> str:
 
 def _companion(p: Path) -> dict[str, Any]:
     return {"name": p.name, "size": p.stat().st_size, "text": preview_text(p)}
+
+
+def _without_cross_line(z: Zone) -> Zone:
+    """The zone as detect proposed it: an earlier cross-line reason removed, its level put back."""
+    old = [e for e in z.evidence if e.code.startswith("cross_line")]
+    if not old:
+        return z
+    base = old[0].params.get("base_confidence", z.confidence)
+    return _replace(z, evidence=[e.__dict__ for e in z.evidence if not e.code.startswith("cross_line")],
+                    confidence=base)
 
 
 def _replace(z: Zone, **changes: Any) -> Zone:
