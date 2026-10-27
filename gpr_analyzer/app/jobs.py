@@ -607,6 +607,7 @@ class Job:
             ln.zones = [_without_cross_line(z) if z.review == "auto" else z for z in ln.zones]
             tracks.append(crossline.LineTrack(
                 line_id=ln.line_id, source=ln.source_file, channel=ln.channel, xy=xy, dx_m=a.dx_m, gps_ok=ok,
+                rtk_fixed=crossline.all_rtk_fixed(ln.raw.metadata.get("gps")),
                 zones=[z for z in ln.zones if z.review != "rejected" and not ln.excluded(z)],
                 excluded=[(sc["trace_start"], sc["trace_end"]) for sc in ln.sections]))
         results = crossline.check_lines(tracks)
@@ -667,6 +668,21 @@ class Job:
         if note is not None:
             ln.status_note = str(note)[:500]
         self._label("line_status", ln, None, before, {"status": ln.status, "note": ln.status_note})
+
+    def approve_reviewed_lines(self) -> list[str]:
+        """Approve every waiting line whose zones (outside excluded sections) have all been reviewed.
+
+        Lines marked for reprocessing stay as they are. Each approval is recorded like a click on "ผ่าน".
+        """
+        done = []
+        for ln in self.lines:
+            if ln.result is not None and ln.status == "pending" and not any(
+                    z.review == "auto" for z in ln.zones if not ln.excluded(z)):
+                self.set_line_status(ln.line_id, "approved")
+                done.append(ln.line_id)
+        if done:
+            self.log(f"อนุมัติเส้นที่ตรวจโซนครบแล้ว {len(done)} เส้น: {', '.join(done)}")
+        return done
 
     def summary(self) -> dict[str, Any]:
         """Key facts to check before the report: per line, the findings that need action, and warnings."""

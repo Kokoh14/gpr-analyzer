@@ -372,7 +372,10 @@ function sidebar(data) {
   if (data.grid) {
     const c = data.counts, all = c.measured + c.interpolated + c.empty, pct = (n) => `${number(100 * n / all, 1)}%`;
     $("s3Datum").textContent += ` · grid ${data.grid.cell_m} m × ${data.grid.dz_m} m: วัดจริง ${pct(c.measured)} · ประมาณค่า ${pct(c.interpolated)}`
-      + ` · ว่าง ${pct(c.empty)} · เติมช่องว่างได้ไม่เกิน ${data.parameters.max_gap_m} m`;
+      + ` · ว่าง ${pct(c.empty)} · เติมช่องว่างได้ไม่เกิน ${data.parameters.max_gap_m} m`
+      + (data.parameters.max_gap_source === "line spacing" ? " (จากระยะห่างระหว่างแนว)" : "")
+      + (data.parameters.line_spacing_m != null ? ` · ระยะห่างระหว่างแนวที่วัดได้ ~${number(data.parameters.line_spacing_m, 2)} m` : "");
+    if (data.parameters.max_gap_source === "line spacing") $("s3Gap").value = data.parameters.max_gap_m;
   }
   const energy = data.track === "envelope" || !!data.grid;
   $("s3Legend").classList.toggle("energy", energy);
@@ -419,7 +422,8 @@ async function load() {
   try {
     let data;
     if (volume) {
-      const q = new URLSearchParams({ frame, cell_m: $("s3Cell").value, max_gap_m: $("s3Gap").value || "0" });
+      const q = new URLSearchParams({ frame, cell_m: $("s3Cell").value, max_gap_m: $("s3Gap").value || "0",
+                                      auto_gap: $("s3Scan").value === "raptor" });
       data = await request(`${base}/volume3d?${q}`);
       state.zones = data.zones;
     } else {
@@ -524,6 +528,14 @@ $("s3LayoutForm").addEventListener("submit", async (event) => {
 for (const id of ["s3Frame", "s3Track", "s3Mode"]) $(id).addEventListener("change", load);
 for (const id of ["s3Paths", "s3Curtains", "s3Slice", "s3VSlice", "s3VEast", "s3VNorth", "s3Zones", "s3Rejected"]) $(id).addEventListener("change", visibility);
 $("s3Build").addEventListener("click", load);
+// Scan type presets: CrossOver lines are 0.5 m or more apart; Raptor swaths are denser, so the gap comes from the data.
+$("s3Scan").addEventListener("change", () => {
+  const scan = $("s3Scan").value;
+  if (scan === "crossover") { $("s3Cell").value = "0.1"; $("s3Gap").value = "0.5"; }
+  if (scan === "raptor") $("s3Cell").value = "0.05";
+  $("s3Gap").disabled = scan === "raptor";
+});
+for (const id of ["s3Cell", "s3Gap"]) $(id).addEventListener("input", () => { if ($("s3Scan").value === "crossover") $("s3Scan").value = "custom"; });
 $("s3Interp").addEventListener("change", () => { sections(); voxelView(); updateSlice(); });
 $("s3Voxels").addEventListener("change", voxelView);
 $("s3VoxDb").addEventListener("change", voxelView);

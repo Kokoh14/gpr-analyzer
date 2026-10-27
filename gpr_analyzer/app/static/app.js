@@ -901,7 +901,7 @@ async function openSummary() {
           <td>${fmt(f.depth_top_m)}–${fmt(f.depth_bottom_m)}</td>
           <td class="small">${f.coord ? `${f.coord[1].toFixed(6)}, ${f.coord[0].toFixed(6)}` : "–"}</td><td>${REV[f.review]}</td></tr>`).join("")}</tbody></table>`
         : `<p class="muted">ไม่มีโซนที่ต้องดำเนินการเร่งด่วน</p>`}</section>
-    <section class="card"><h3>รายเส้น</h3><table class="scan"><thead><tr><th>เส้น</th><th>สถานะ</th><th>ช่วง / ความยาว</th><th>GPS</th>
+    <section class="card"><h3>รายเส้น <button class="btn ghost small" id="approveReviewed" title="กด &quot;ผ่าน&quot; ให้ทุกเส้นที่รอตรวจและตรวจโซนครบแล้ว เส้นที่ทำเครื่องหมายต้องประมวลผลใหม่จะไม่ถูกเปลี่ยน">อนุมัติเส้นที่ตรวจโซนครบแล้วทั้งหมด</button></h3><table class="scan"><thead><tr><th>เส้น</th><th>สถานะ</th><th>ช่วง / ความยาว</th><th>GPS</th>
       <th>ความเร็วคลื่น</th><th>ค่าที่ผู้ใช้ตั้ง</th><th>โซน</th><th>ตรวจแล้ว</th><th>ช่วงที่ไม่ใช้</th></tr></thead><tbody>
       ${s.lines.map((l) => `<tr><td><a href="#" data-goline="${esc(l.line_id)}"><b>${esc(l.line_id)}</b></a><br><span class="small muted">${esc(l.source_file)}</span></td>
         <td><span class="lst ${l.status}">${LSTATUS[l.status][0]}</span> ${LSTATUS[l.status][1]}${l.status_note ? `<br><span class="small muted">${esc(l.status_note)}</span>` : ""}</td>
@@ -913,6 +913,14 @@ async function openSummary() {
       </tbody></table></section>`;
   $$("#summaryView [data-export]").forEach((a) => (a.href = jobUrl(`/export/${a.dataset.export}`)));
   $$("#summaryView [data-package]").forEach((a) => (a.href = jobUrl("/report-package")));
+  $("#approveReviewed").addEventListener("click", async () => {
+    try {
+      const r = await post(jobUrl("/approve-reviewed"), {});
+      S.job = r.job;
+      toast(r.approved.length ? `อนุมัติแล้ว ${r.approved.length} เส้น: ${r.approved.join(", ")}` : "ไม่มีเส้นที่รอตรวจและตรวจโซนครบแล้ว");
+      openSummary();
+    } catch (e) { toast(e.message); }
+  });
   $$("[data-delsnap]").forEach((b) => b.addEventListener("click", async () => {
     try { await api(jobUrl(`/snapshots/${b.dataset.delsnap}`), { method: "DELETE" }); openSummary(); } catch (e) { toast(e.message); }
   }));

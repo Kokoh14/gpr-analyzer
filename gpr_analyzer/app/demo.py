@@ -77,7 +77,7 @@ DEMO_GPS = {"DEMO_LINE01": (13.738600, 100.531000, 80.0), "DEMO_LINE02": (13.738
 
 
 def write_cor(rg: Radargram, path: Path, lat0: float, lon0: float, heading_deg: float, every: int = 10) -> Path:
-    """ImpulseRadar-style .cor GPS file: trace, date, time, lat, N/S, lon, E/W, elevation (one fix per `every` traces)."""
+    """ImpulseRadar-style .cor GPS file: trace, date, time, lat, N/S, lon, E/W, elevation, quality 4 = RTK fixed (one fix per `every` traces)."""
     dx = rg.dx_m or 0.05
     m_lat = 111_320.0
     m_lon = m_lat * np.cos(np.radians(lat0))
@@ -87,7 +87,7 @@ def write_cor(rg: Radargram, path: Path, lat0: float, lon0: float, heading_deg: 
         d = tr * dx
         lat = lat0 + d * np.cos(h) / m_lat + 2e-7 * np.sin(i / 3.0)  # small GPS wobble
         lon = lon0 + d * np.sin(h) / m_lon
-        rows.append(f"{tr}\t2026-10-21\t09:00:{i % 60:02d}.000\t{lat:.8f}\tN\t{lon:.8f}\tE\t2.10\tM\t1")
+        rows.append(f"{tr}\t2026-10-21\t09:00:{i % 60:02d}.000\t{lat:.8f}\tN\t{lon:.8f}\tE\t2.10\tM\t4")
     path.write_text("\n".join(rows) + "\n", encoding="latin-1")
     return path
 

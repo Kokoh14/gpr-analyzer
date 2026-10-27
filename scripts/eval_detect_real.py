@@ -100,7 +100,8 @@ def main(argv=None) -> int:
         rz = [Zone.from_dict(z) for z in zones]
         tracks.append(crossline.LineTrack(
             line_id=line_id, source=base, channel=ch, xy=xy, zones=rz,
-            dx_m=an.dx_m, gps_ok=xy is not None and crossline.gps_length_ok(xy, length, 0.15)))
+            dx_m=an.dx_m, gps_ok=xy is not None and crossline.gps_length_ok(xy, length, 0.15),
+            rtk_fixed=crossline.all_rtk_fixed(rg.metadata.get("gps"))))
         for z in zones:
             zone_rows.append({"line": line_id, "zone": z["zone_id"], "type": z["suspected_type"],
                               "level": z["confidence"], "trace_start": z["trace_start"], "trace_end": z["trace_end"],

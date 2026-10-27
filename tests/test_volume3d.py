@@ -67,6 +67,18 @@ def test_interpolation_only_between_lines_within_max_gap(tmp_path):
     assert (decode(tight)[1][1:4] == 0).all() and tight["counts"]["interpolated"] == 0
 
 
+def test_auto_gap_follows_measured_line_spacing(tmp_path):
+    # Raptor-style dense swath: the gap is taken from the data (spacing 0.4 m, +10 %), not typed in
+    v = volume3d.survey_volume(parallel(tmp_path), frame="local", max_gap_m=0.0, auto_gap=True)
+    p = v["parameters"]
+    assert p["line_spacing_m"] == pytest.approx(0.4, abs=1e-6) and p["max_gap_m"] == pytest.approx(0.44)
+    assert p["max_gap_source"] == "line spacing" and v["counts"]["interpolated"] == 63
+    user = volume3d.survey_volume(parallel(tmp_path, gap=1.0), frame="local", max_gap_m=0.5)
+    assert user["parameters"]["max_gap_source"] == "user" and user["parameters"]["line_spacing_m"] == pytest.approx(1.0)
+    assert user["counts"]["interpolated"] == 0  # CrossOver lines 1 m apart are not bridged at 0.5 m
+    assert volume3d.line_spacing([np.zeros((5, 2))]) is None
+
+
 def test_no_extrapolation_beyond_lines_or_line_ends(tmp_path):
     lines = [line("A"), line("B"), line("C", n=5)]
     j = job(tmp_path, lines, {"A": {"start": [0.05, 0.05], "end": [2.05, 0.05]},
