@@ -228,7 +228,7 @@ def auto_display(d0: np.ndarray, dt_ns: float, dx_m: float | None, fc: float,
 
     sig = np.abs(d[skip:][:, live])  # past the direct wave; noise below cap2 is not boosted, so it sits low
     clip = float(np.percentile(sig, CLIP_PCT)) or 1.0
-    steps.append(("display_contrast", {"clip_percentile": CLIP_PCT, "clip_value": float(f"{clip:.4g}")},
+    steps.append(("display_contrast", {"clip_quantile": CLIP_PCT / 100, "clip_value": float(f"{clip:.4g}")},
                   "colour scale saturates only the strongest 1 in 100 samples below the direct wave"))
     return d, steps, clip
 
