@@ -23,6 +23,8 @@ Rules (defaults in CrossLineParams; uncalibrated, chosen to be conservative):
   repeats on the neighbours (may be a pipe or cable across the lines) or not (isolated object).
 * Lines whose GPS path length differs from the wheel distance by more than max_length_mismatch are not
   used: their positions are not good enough to compare lines.
+* Lines whose GPS is not RTK fixed at every fix (.cor quality 4) are not used either, on either side:
+  plain or float GPS can be off by metres, more than the distances judged here.
 """
 
 from __future__ import annotations
@@ -68,6 +70,7 @@ class LineTrack:
     dx_m: float | None = None
     excluded: list[tuple[int, int]] = field(default_factory=list)
     gps_ok: bool = True
+    rtk_fixed: bool = True  # every GPS fix is RTK fixed (quality 4); otherwise the line is not compared
 
 
 @dataclass
@@ -80,12 +83,18 @@ class CrossLineResult:
     text_en: str = ""
     kind: str = "not_assessed"  # evidence kind: present / absent / warning / not_assessed
     code: str = "cross_line_not_assessed"
+    not_rtk: list[str] = field(default_factory=list)  # nearby lines left out because their GPS is not RTK fixed
 
 
 def local_xy(lat: np.ndarray, lon: np.ndarray, lat0: float, lon0: float) -> np.ndarray:
     """Equirectangular metres east / north of (lat0, lon0). Fine over a survey a few km across."""
     k = math.radians(1.0) * EARTH_RADIUS_M
     return np.column_stack([(np.asarray(lon) - lon0) * k * math.cos(math.radians(lat0)), (np.asarray(lat) - lat0) * k])
+
+
+def all_rtk_fixed(gps: list[dict] | None) -> bool:
+    """Every fix of a .cor track is RTK fixed (NMEA quality 4). A track without quality values is not."""
+    return bool(gps) and all(g.get("quality") == 4 for g in gps)
 
 
 def gps_length_ok(xy: np.ndarray, wheel_length_m: float | None, max_mismatch: float) -> bool:
@@ -129,6 +138,8 @@ def check_lines(tracks: Iterable[LineTrack], params: CrossLineParams | None = No
 def _check_zone(a: LineTrack, z: Any, tracks: list[LineTrack], p: CrossLineParams) -> CrossLineResult:
     if a.xy is None or not a.gps_ok:
         return _not_assessed("ไม่มี GPS ที่เชื่อถือได้ของแนวนี้", "no reliable GPS on this line")
+    if not a.rtk_fixed:
+        return _not_assessed("GPS ของแนวนี้ไม่ใช่ RTK fixed ทุกจุด", "the GPS of this line is not RTK fixed throughout")
     n = len(a.xy)
     c = min(max((z.trace_start + z.trace_end) // 2, 0), n - 1)
     pc = a.xy[c]
@@ -145,6 +156,9 @@ def _check_zone(a: LineTrack, z: Any, tracks: list[LineTrack], p: CrossLineParam
         dist = float(d[j])
         if dist > p.max_gap_m:
             continue
+        if not b.rtk_fixed:
+            res.not_rtk.append(b.line_id)
+            continue
         reach = half_w + p.gps_uncertainty_m + p.match_m
         near = np.flatnonzero(d <= dist + reach)
         lo, hi = int(near.min()), int(near.max())
@@ -156,7 +170,11 @@ def _check_zone(a: LineTrack, z: Any, tracks: list[LineTrack], p: CrossLineParam
             res.contradicted_by.append((b.line_id, round(dist, 2)))
         elif res.status == "not_assessed":
             res.status = "passed_nearby"
-    return _verdict(z, res, half_w, p)
+    out = _verdict(z, res, half_w, p)
+    if res.not_rtk:
+        out.text_th += f" (ไม่นำแนว {', '.join(res.not_rtk)} มาเทียบ เพราะ GPS ไม่ใช่ RTK fixed)"
+        out.text_en += f" (line(s) {', '.join(res.not_rtk)} left out: GPS not RTK fixed)"
+    return out
 
 
 def _not_assessed(why_th: str, why_en: str) -> CrossLineResult:

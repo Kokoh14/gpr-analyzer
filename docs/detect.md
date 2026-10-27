@@ -81,10 +81,11 @@ zones only. Each suspicious zone (void-like, scattered, pipe / point, unknown) g
 |---|---|---|
 | ✓ seen on neighbour | another line (other file, same channel) within 2 m has a suspicious zone within half the zone width + GPS error + 0.5 m, depth overlapping ± max(0.15 m, 20 %) | level kept (no upgrades until calibrated) |
 | ⚠ not on neighbour | a neighbour passes over the zone's footprint (distance + GPS error ≤ ½ × half the box width; the box includes diffraction tails) and shows nothing there, and the reviewer has not excluded that part | void-like / scattered / unknown one level lower; pipe / point keeps its level and is called an isolated object (stone, debris) rather than a pipe across the lines |
-| – not assessed | no GPS, GPS length differs from the wheel distance by > 15 %, no line within 2 m, or neighbours too far for the zone width | none |
+| – not assessed | no GPS, GPS length differs from the wheel distance by > 15 %, GPS not RTK fixed at every fix (.cor quality 4), no line within 2 m, or neighbours too far for the zone width | none |
 
-GPS error defaults to 0.5 m (`CrossLineParams.gps_uncertainty_m`). With plain GNSS (2–5 m) the check
-mostly says "not assessed", which is the honest answer; with RTK set it to ~0.05.
+GPS error defaults to 0.5 m (`CrossLineParams.gps_uncertainty_m`). A line whose GPS is not RTK fixed at
+every fix is left out on both sides: its own zones are not assessed, and it is not used as a neighbour
+(the reason names it). Plain or float GPS can be off by metres, more than the distances judged here.
 
 ## Measuring it
 

@@ -23,8 +23,8 @@
     <a class="btn" data-export="report.html">HTML</a>
     <a class="btn ghost" data-export="zones.csv" title="ตารางโซน (Excel อ่านภาษาไทยได้)">CSV โซน</a>
     <a class="btn ghost" data-export="survey.json">JSON</a>
-    <a class="btn ghost" data-export="survey.kmz" title="Google Earth แบบเดียวกับ ViewPoint: แนวสแกน จุดมาร์กภาคสนาม และโซนของเรา พร้อมภาพ">KMZ</a>
-    <a class="btn ghost" data-export="survey.kml" title="Google Earth แบบเดียวกับ ViewPoint (ไม่มีภาพ)">KML</a>
+    <a class="btn ghost" data-export="survey.kmz" title="ใช้ภายใน สำหรับเทียบกับ ViewPoint (รวมโซนที่ยังไม่ตรวจ) ไฟล์ส่งลูกค้าใช้ zones.kmz ใน &quot;รายงานครบชุด ZIP&quot;: แนวสแกน จุดมาร์กภาคสนาม และโซนของเรา พร้อมภาพ">KMZ (ใช้ภายใน)</a>
+    <a class="btn ghost" data-export="survey.kml" title="ใช้ภายใน สำหรับเทียบกับ ViewPoint (ไม่มีภาพ) ไฟล์ส่งลูกค้าใช้ zones.kmz ใน &quot;รายงานครบชุด ZIP&quot;">KML (ใช้ภายใน)</a>
     <a class="btn ghost" data-export="zones-condor.zip" title=".cnf / .pobj / .lobj + manifest ระดับผิวและโซนที่ข้าม">Condor ZIP</a>
     <a class="btn ghost" id="labelsLink" title="บันทึกการตรวจทานทุกครั้ง สำหรับสอบเทียบภายหลัง">labels</a>
     <a class="btn ghost" data-export="comparison.csv" title="ผลเทียบกับซอฟต์แวร์อ้างอิง ทีละจุด (เปิดด้วย Excel)">เทียบผล CSV</a>
@@ -176,6 +176,7 @@
         <button class="btn small" id="s3Full">เต็มจอ</button>
       </div>
       <div class="s3-toolbar s3-volume">
+        <label title="CrossOver สแกนทีละเส้น แนวห่างกันตั้งแต่ 0.5 m ขึ้นไป; Raptor หลายช่องในชุดเดียว แนวชิดกันกว่า จึงใช้ระยะห่างจริงที่วัดจากข้อมูล">แบบการสแกน <select id="s3Scan"><option value="crossover" selected>CrossOver รายเส้น</option><option value="raptor">Raptor หลายช่อง (ระยะจากข้อมูล)</option><option value="custom">กำหนดเอง</option></select></label>
         <label>ขนาดช่อง grid <select id="s3Cell"><option value="0.05">0.05 m</option><option value="0.1" selected>0.10 m</option><option value="0.2">0.20 m</option><option value="0.5">0.50 m</option></select></label>
         <label title="ช่องว่างระหว่างแนวที่กว้างไม่เกินค่านี้จะถูกเติมค่าโดยประมาณ ช่องที่กว้างกว่าจะเว้นว่าง">เติมช่องว่างระหว่างแนวได้ไม่เกิน (m) <input id="s3Gap" type="number" min="0" max="5" step="0.1" value="0.5"></label>
         <button class="btn primary small" id="s3Build">สร้างปริมาตร</button>

@@ -1,6 +1,7 @@
 import numpy as np
 
-from gpr_analyzer.detect.crossline import CrossLineParams, LineTrack, check_lines, gps_length_ok, local_xy
+from gpr_analyzer.detect.crossline import (CrossLineParams, LineTrack, all_rtk_fixed, check_lines, gps_length_ok,
+                                          local_xy)
 from gpr_analyzer.report.schema import Zone
 
 DX = 0.02
@@ -87,6 +88,19 @@ def test_bad_or_missing_gps():
     xy = track(0.0)
     assert gps_length_ok(xy, len(xy) * DX, 0.15)
     assert not gps_length_ok(xy * 1.5, len(xy) * DX, 0.15)
+
+
+def test_lines_without_rtk_fixed_gps_are_not_compared():
+    # neighbour not RTK fixed: the zone that would be lowered is left as it is, and the reason names the line
+    r = run([zone("A1", "A", 8, 12, 1.0, 1.5)], [], gap=0.5, rtk_fixed=False)[("A", "A1")]
+    assert r.status == "not_assessed" and r.new_confidence is None and "B" in r.text_th and "RTK" in r.text_en
+    # zone's own line not RTK fixed
+    a = LineTrack("A", "A.iprb", 1, track(0.0), [zone("A1", "A", 8, 12, 1.0, 1.5)], DX, rtk_fixed=False)
+    b = LineTrack("B", "B.iprb", 1, track(0.5), [], DX)
+    r = check_lines([a, b])[("A", "A1")]
+    assert r.status == "not_assessed" and r.new_confidence is None and "RTK" in r.text_en
+    assert all_rtk_fixed([{"quality": 4}, {"quality": 4}])
+    assert not all_rtk_fixed([{"quality": 4}, {"quality": 5}]) and not all_rtk_fixed([{"lat": 1}]) and not all_rtk_fixed([])
 
 
 def test_local_xy_metres():

@@ -161,11 +161,11 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
 
     @app.get("/api/jobs/{job_id}/volume3d")
     def get_volume3d(job_id: str, frame: str = "gps", cell_m: float = 0.1, dz_m: float = 0.05,
-                     max_gap_m: float = 0.5, max_depth_m: float | None = None) -> dict:
+                     max_gap_m: float = 0.5, max_depth_m: float | None = None, auto_gap: bool = False) -> dict:
         j = job(job_id)
         with j.lock:
             frozen = scene3d.snapshot(j)
-        return guarded(volume3d.survey_volume, frozen, frame, cell_m, dz_m, max_gap_m, max_depth_m)
+        return guarded(volume3d.survey_volume, frozen, frame, cell_m, dz_m, max_gap_m, max_depth_m, auto_gap)
 
     @app.get("/api/jobs/{job_id}/zones3d")
     def get_zones3d(job_id: str, frame: str = "gps") -> dict:
@@ -270,6 +270,13 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         with j.lock:
             guarded(j.set_line_status, line_id, str(body.get("status", "")), body.get("note"))
         return j.to_json()
+
+    @app.post("/api/jobs/{job_id}/approve-reviewed")
+    def approve_reviewed(job_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            done = j.approve_reviewed_lines()
+        return {"approved": done, "job": j.to_json()}
 
     @app.get("/api/jobs/{job_id}/summary")
     def summary(job_id: str) -> dict:

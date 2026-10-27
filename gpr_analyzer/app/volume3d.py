@@ -15,6 +15,8 @@ stricter and each one is reported with the result:
 * Interpolated cell: no trace inside, but it lies between two different lines: the directions to their
   nearest measured cells are more than 90 degrees apart and the two distances add up to at most max_gap
   (Condor's "max gap"). Value: inverse-distance-squared mean of the measured cells within max_gap.
+  auto_gap sets max_gap from the measured line spacing (line_spacing), for dense array swaths whose
+  spacing the user does not type in.
 * Everything else is empty: nothing is extrapolated beyond the outer lines or past line ends.
 """
 from __future__ import annotations
@@ -123,12 +125,29 @@ def _tracks(xy: np.ndarray, max_points: int = 200) -> list[list[list[float]]]:
     return out
 
 
+def line_spacing(tracks: list[np.ndarray]) -> float | None:
+    """Typical distance (m) from a line to its nearest other line: the median over lines of each line's median.
+
+    Points where lines cross pull a line's median down only when they are most of it, so crossing grids
+    still give the parallel spacing. None with fewer than two positioned lines.
+    """
+    pts = [xy[np.isfinite(xy).all(axis=1)] for xy in tracks]
+    pts = [p[np.unique(np.linspace(0, len(p) - 1, min(len(p), 200)).round().astype(int))] for p in pts if len(p)]
+    if len(pts) < 2:
+        return None
+    per_line = []
+    for k, p in enumerate(pts):
+        others = np.concatenate([q for j, q in enumerate(pts) if j != k])
+        per_line.append(float(np.median(cKDTree(others).query(p)[0])))
+    return float(np.median(per_line))
+
+
 def _encode(values: np.ndarray) -> str:
     return base64.b64encode(np.ascontiguousarray(values, dtype=np.uint8).tobytes()).decode("ascii")
 
 
 def survey_volume(job: Any, frame: str = "gps", cell_m: float = 0.1, dz_m: float = 0.05,
-                  max_gap_m: float = 0.5, max_depth_m: float | None = None) -> dict:
+                  max_gap_m: float = 0.5, max_depth_m: float | None = None, auto_gap: bool = False) -> dict:
     if frame not in ("gps", "local"):
         raise ValueError("frame must be gps or local")
     cell_m = _check("cell_m", cell_m, 0.02, 2.0)
@@ -150,6 +169,10 @@ def survey_volume(job: Any, frame: str = "gps", cell_m: float = 0.1, dz_m: float
         used.append((ln, xy, *d))
     if not used:
         raise ValueError("no positioned lines in this frame; supply GPS or a local layout")
+    spacing = line_spacing([xy for _, xy, *_ in used])
+    if auto_gap:
+        # 10 % over the spacing so lines that wander a little still pair up; 0 (no filling) without two lines
+        max_gap_m = round(min(spacing * 1.1, 5.0), 2) if spacing else 0.0
 
     bottom = max(float(dep[-1]) for *_, dep in used)
     if max_depth_m is not None:
@@ -235,7 +258,8 @@ def survey_volume(job: Any, frame: str = "gps", cell_m: float = 0.1, dz_m: float
         "origin_wgs84": origin, "surface": "relative level surface z=0 m; no terrain correction",
         "grid": {"x0_m": float(lo[0]), "y0_m": float(lo[1]), "cell_m": cell_m, "nx": nx, "ny": ny,
                  "dz_m": dz_m, "nz": len(z), "depth_m": z.round(6).tolist()},
-        "parameters": {"max_gap_m": max_gap_m, "floor_db": FLOOR_DB,
+        "parameters": {"max_gap_m": max_gap_m, "max_gap_source": "line spacing" if auto_gap else "user",
+                       "line_spacing_m": round(spacing, 3) if spacing is not None else None, "floor_db": FLOOR_DB,
                        "reference": f"per-line {REF_PERCENTILE} percentile of envelope = 0 dB",
                        "max_fix_gap_m": MAX_FIX_GAP_M},
         # volume: uint8 per (depth, north row, east column); 0 = no data, 1..255 = FLOOR_DB..0 dB.

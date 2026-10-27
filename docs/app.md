@@ -67,6 +67,11 @@ labels file).
   parked car, outside the survey area) with a reason. Zones whose centre falls inside are left out of the report,
   and the range is hatched in the figures as "section excluded by the reviewer". Undo by removing the section.
 - **Line status**: pending / approved (use in the report) / needs reprocessing, with a note.
+  On the summary page, **อนุมัติเส้นที่ตรวจโซนครบแล้วทั้งหมด** approves every waiting line whose zones (outside
+  excluded sections) are all reviewed; lines marked for reprocessing are left as they are. Each approval is
+  logged like a click.
+- **KMZ / KML (ใช้ภายใน)** in the top bar: ViewPoint-style Google Earth file for comparing with ViewPoint. It
+  includes unreviewed zones. For the client, use `zones.kmz` in the report package.
 - **Reprocessing keeps the review**: zones drawn by the reviewer stay, and an accept / reject / edit on an old
   automatic zone moves to the new zone covering the same place (box overlap ≥ 0.5). Unmatched decisions are
   listed in the `reprocess` label record.

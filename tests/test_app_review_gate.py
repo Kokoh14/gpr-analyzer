@@ -93,3 +93,24 @@ def test_cross_line_reason_added_once(demo):
     assert first and set(first) == {1}  # the two demo passes are ~9 m apart: not assessed, but said so
     j = c.post(f"/api/jobs/{jid}/lines/L2/reprocess", json={"options": {}}).json()
     assert set(counts(j)) == {1}
+
+
+def test_approve_all_lines_whose_zones_are_reviewed(demo):
+    c, j = demo
+    jid = j["job_id"]
+    first, second = j["lines"][0], j["lines"][1]
+    assert first["zones"] and second["zones"]
+    for z in first["zones"]:
+        c.post(f"/api/jobs/{jid}/lines/{first['line_id']}/zones/{z['zone_id']}/review", json={"action": "accept"})
+    r = c.post(f"/api/jobs/{jid}/approve-reviewed").json()
+    # only the fully reviewed line is approved; the other still has unreviewed zones
+    assert r["approved"] == [first["line_id"]]
+    status = {ln["line_id"]: ln["status"] for ln in r["job"]["lines"]}
+    assert status == {first["line_id"]: "approved", second["line_id"]: "pending"}
+    # a line marked for reprocessing is never approved by the bulk button
+    for z in second["zones"]:
+        c.post(f"/api/jobs/{jid}/lines/{second['line_id']}/zones/{z['zone_id']}/review", json={"action": "reject"})
+    c.post(f"/api/jobs/{jid}/lines/{second['line_id']}/status", json={"status": "redo"})
+    assert c.post(f"/api/jobs/{jid}/approve-reviewed").json()["approved"] == []
+    acts = [json.loads(s)["action"] for s in c.get(f"/api/jobs/{jid}/labels.jsonl").text.splitlines()]
+    assert acts.count("line_status") == 2  # the bulk approval is recorded like a click, plus the "redo"

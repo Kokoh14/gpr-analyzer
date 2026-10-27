@@ -29,6 +29,7 @@ all passes at 6 m and 1.0 m deep, a cavity under passes 4–6 at 10–12 m, roof
 | Amplitude | Hilbert envelope ÷ that line's 99.5th percentile, in dB, floor −40 dB. Lines are gained separately, so this is relative energy, not reflectivity, not a probability. |
 | Measured cell | At least one trace inside the cell (default 0.10 m). Mean per line, then mean over lines. |
 | Interpolated cell | No trace inside, but it lies **between two different lines** (directions to their nearest measured cells more than 90° apart) whose distances add up to at most *max gap* (default 0.5 m, Condor's term). Value: inverse-distance² mean of measured cells within max gap. Drawn faded and can be hidden. |
+| Scan type | **CrossOver** (single-channel lines, 0.5 m or more apart): cell 0.10 m, max gap 0.5 m. **Raptor** (several channels in one swath, closer together): cell 0.05 m, max gap = measured line spacing + 10 % (median over lines of the distance to the nearest other line), capped at 5 m. **Custom**: type both. The measured spacing is always printed under the view. Raptor array files are not read yet, so the Raptor preset only helps once they are. |
 | Empty | Everything else. Nothing is extrapolated beyond the outer lines or past line ends; one line alone never fills a cell. |
 
 The percentages of measured / interpolated / empty cells are printed under the view and in the PNG.
