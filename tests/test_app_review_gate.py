@@ -67,7 +67,10 @@ def test_summary_lists_findings_and_warnings(demo):
     codes = {(w["line_id"], w["code"]) for w in s["warnings"]}
     assert ("L1", "unreviewed") in codes and ("L1", "not_approved") in codes and (None, "missing_info") in codes
     assert all(f["action"] in ("E", "1", "2") for f in s["findings"])
-    assert s["findings"] and s["findings"][0]["coord"] is not None  # demo lines have GPS
+    # demo lines have GPS, so every finding carries a coordinate (the demo may have none at E/1/2: its
+    # cavity sits between full-depth stripes; an earlier finding here was a false void on a stripe)
+    assert all(ln["has_gps"] for ln in s["lines"])
+    assert all(f["coord"] is not None for f in s["findings"])
     for ln in j["lines"]:
         for z in ln["zones"]:
             c.post(f"/api/jobs/{jid}/lines/{ln['line_id']}/zones/{z['zone_id']}/review", json={"action": "accept"})
@@ -75,3 +78,18 @@ def test_summary_lists_findings_and_warnings(demo):
     s = c.get(f"/api/jobs/{jid}/summary").json()
     assert {w["code"] for w in s["warnings"]} <= {"default_velocity", "missing_info"}
     assert s["totals"]["approved"] == 2
+
+
+def test_cross_line_reason_added_once(demo):
+    c, j = demo
+    jid = j["job_id"]
+
+    def counts(j):
+        return [sum(e["code"].startswith("cross_line") for e in z["evidence"])
+                for ln in j["lines"] for z in ln["zones"]
+                if z["suspected_type"] in ("void_like", "scattered", "unknown", "pipe_point")]
+
+    first = counts(j)
+    assert first and set(first) == {1}  # the two demo passes are ~9 m apart: not assessed, but said so
+    j = c.post(f"/api/jobs/{jid}/lines/L2/reprocess", json={"options": {}}).json()
+    assert set(counts(j)) == {1}

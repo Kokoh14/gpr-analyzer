@@ -13,12 +13,12 @@ import numpy as np
 
 from gpr_analyzer.core import Radargram
 from gpr_analyzer.detect._signal import contrast_section, surface_polarity, envelope
-from gpr_analyzer.detect.artifacts import ArtifactParams, detect_artifacts
+from gpr_analyzer.detect.artifacts import ArtifactParams, detect_artifacts, detect_ringing, suppress_ringing
 from gpr_analyzer.detect.classify import ClassifyParams, Context, classify_zone
 from gpr_analyzer.detect.hyperbola import HyperbolaParams, estimate_velocity, find_hyperbolas
 from gpr_analyzer.detect.models import DetectionResult, ZoneType
 from gpr_analyzer.detect.risk import RiskContext, assess_collapse_risk, velocity_depth_uncertainty
-from gpr_analyzer.detect.zones import ZoneParams, find_zones
+from gpr_analyzer.detect.zones import ZoneParams, artifact_mask, find_zones, limb_mask
 
 
 @dataclass
@@ -47,6 +47,10 @@ def analyze_line(r: Radargram, params: DetectParams | None = None, risk_context:
     contrast = contrast_section(r.data, env)
     c, per, top = contrast
     artifacts = detect_artifacts(r, p.artifacts, env=env, period=per)
+    ringing = detect_ringing(r, c, per, top, p.artifacts, skip=artifact_mask(r.n_traces, artifacts))
+    artifacts += ringing
+    c = suppress_ringing(c, ringing, r.dt_ns, p.artifacts)
+    contrast = (c, per, top)
     hyps = find_hyperbolas(r, p.hyperbola, contrast=contrast, artifacts=artifacts)
     vel = estimate_velocity(r, p.hyperbola, hyperbolas=hyps)
 
@@ -63,7 +67,7 @@ def analyze_line(r: Radargram, params: DetectParams | None = None, risk_context:
                        hyperbolas=hyps)
     sign = p.surface_polarity if p.surface_polarity is not None else surface_polarity(r.data, per, top)
     ctx = Context(data=r.data.astype(float), contrast=c, period=per, surface_sign=sign, hyperbolas=hyps,
-                  artifacts=artifacts, dt_ns=r.dt_ns)
+                  artifacts=artifacts, dt_ns=r.dt_ns, limbs=limb_mask(c, hyps, r.dt_ns, r.dx_m, per, p.zones))
     rc = risk_context or RiskContext()
     if rc.depth_uncertainty == RiskContext().depth_uncertainty:
         rc = RiskContext(**{**asdict(rc), "depth_uncertainty": depth_unc})
@@ -96,6 +100,7 @@ def _params_dict(p: DetectParams) -> dict[str, Any]:
 _REPORT_TYPE = {ZoneType.POINT: "pipe_point", ZoneType.UNCLASSIFIED: "unknown"}
 _REPORT_KIND = {"found": "present", "absent": "absent", "warning": "warning", "not_assessed": "warning"}
 _GRADE_TO_ACTION = {1: "E", 2: "1", 3: "2", 4: "3"}
+_TIME_BANDS = ("bottom_noise", "ringing")  # artifact kinds that cover a time range, not traces
 
 
 def to_report_records(res: DetectionResult, line_id: str = "") -> tuple[list[dict], list[dict]]:
@@ -137,8 +142,8 @@ def to_report_records(res: DetectionResult, line_id: str = "") -> tuple[list[dic
             "review": "auto", "note": note, "ground_truth": z.ground_truth,
         })
     regions = [{"trace_start": a.trace_start, "trace_end": a.trace_end, "reason": a.kind,
-                "time_top_ns": a.time_start_ns if a.kind == "bottom_noise" else None,
-                "time_bottom_ns": a.time_end_ns if a.kind == "bottom_noise" else None}
+                "time_top_ns": a.time_start_ns if a.kind in _TIME_BANDS else None,
+                "time_bottom_ns": a.time_end_ns if a.kind in _TIME_BANDS else None}
                for a in res.artifacts]
     return zones, regions
 
