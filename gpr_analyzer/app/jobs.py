@@ -40,9 +40,8 @@ APP_VERSION = "0.1"
 VIEWS = ("grey", "high_gain", "envelope", "viewpoint")
 EDITABLE = ("trace_start", "trace_end", "time_top_ns", "time_bottom_ns", "suspected_type", "confidence", "action",
             "note")
-# Processing options the screen exposes; everything else stays automatic.
-OPTION_FIELDS = ("velocity_m_per_ns", "center_freq_mhz", "band_mhz", "background", "background_window_m",
-                 "gain_max_db", "agc_window_ns", "time_zero", "migration")
+# All processing fields must survive imported workflows and checkpoints.
+OPTION_FIELDS = tuple(f.name for f in fields(ProcessingOptions))
 
 
 def _now() -> str:
@@ -51,29 +50,29 @@ def _now() -> str:
 
 def parse_options(d: dict[str, Any] | None) -> ProcessingOptions:
     """ProcessingOptions from the form; blank values mean 'automatic'."""
-    opt = ProcessingOptions()
-    for k, v in (d or {}).items():
-        if k not in OPTION_FIELDS or v in (None, "", []):
+    from gpr_analyzer.processing.workflows import options_from_dict
+
+    if d is not None and not isinstance(d, dict):
+        raise ValueError("options must be an object")
+    clean = {}
+    strings = {"background", "background_statistic", "time_zero_source", "migration"}
+    for key, value in (d or {}).items():
+        if value in (None, "", []):
             continue
-        if k == "band_mhz":
-            lo, hi = (float(x) for x in v)
-            if not 0 < lo < hi:
-                raise ValueError("band_mhz needs 0 < low < high")
-            v = (lo, hi)
-        elif k == "time_zero":
-            v = bool(v)
-        elif k in ("background", "migration"):
-            v = str(v)
-        else:
-            v = float(v)
-            if v <= 0:
-                raise ValueError(f"{k} must be positive")
-        setattr(opt, k, v)
-    if opt.background not in ("sliding", "global", "none"):
-        raise ValueError("background must be sliding, global or none")
-    if opt.migration not in ("none", "stolt", "kirchhoff"):
-        raise ValueError("migration must be none, stolt or kirchhoff")
-    return opt
+        if key not in OPTION_FIELDS:
+            raise ValueError(f"unknown processing option: {key}")
+        if key == "band_mhz":
+            try:
+                value = [float(x) for x in value]
+            except (TypeError, ValueError):
+                raise ValueError("band_mhz needs [low, high]") from None
+        elif key not in strings | {"time_zero", "estimate_velocity"}:
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                raise ValueError(f"invalid {key}") from None
+        clean[key] = value
+    return options_from_dict(clean)
 
 
 def options_dict(opt: ProcessingOptions) -> dict[str, Any]:
@@ -160,8 +159,23 @@ class LineState:
         lat, lon = pos
         n = len(lat) - 1
         i0, i1 = min(max(z.trace_start, 0), n), min(max(z.trace_end, 0), n)
-        return _replace(z, coord_start=(float(lon[i0]), float(lat[i0])), coord_end=(float(lon[i1]), float(lat[i1])),
-                        datum="WGS84")
+        out = _replace(z, coord_start=(float(lon[i0]), float(lat[i0])), coord_end=(float(lon[i1]), float(lat[i1])),
+                       datum="WGS84")
+        # Altitude is needed for Condor's GPS Z. Never substitute depth or zero for a missing altitude.
+        heights = {}
+        for g in self.raw.metadata.get("gps") or []:
+            try:
+                tr, height = float(g["trace"]), float(g["elevation"])
+                if np.isfinite([tr, height]).all() and g.get("quality") != 0:
+                    heights.setdefault(tr, height)
+            except (KeyError, TypeError, ValueError):
+                continue
+        if len(heights) >= 2:
+            traces = sorted(heights)
+            if traces[0] <= i0 <= i1 <= traces[-1]:
+                out = _replace(out, surface_elevation_start_m=float(np.interp(i0, traces, [heights[t] for t in traces])),
+                               surface_elevation_end_m=float(np.interp(i1, traces, [heights[t] for t in traces])))
+        return out
 
     def png(self, view: str) -> bytes:
         if view not in self.views():
@@ -543,8 +557,13 @@ class Job:
         ln = self.line(line_id)
         opt = parse_options(options)
         old, old_auto = list(ln.zones), set(ln.auto_zones)
+        previous = ln.options
         ln.options = opt
-        ln.process()
+        try:
+            ln.process()
+        except Exception:
+            ln.options = previous
+            raise
         carried, dropped = carry_reviews(ln, old, old_auto)
         self.apply_cross_line()
         if ln.status == "redo":
@@ -811,9 +830,13 @@ class Job:
         """Write report.pdf/.docx/.html, zones.csv or survey.json into the job folder."""
         out = self.folder / "exports"
         out.mkdir(exist_ok=True)
-        allowed = {"report.pdf", "report.docx", "report.html", "zones.csv", "survey.json"}
+        allowed = {"report.pdf", "report.docx", "report.html", "zones.csv", "survey.json",
+                   "zones.cnf", "zones.pobj", "zones.lobj", "zones-condor.zip"}
         if name not in allowed:
             raise KeyError(name)
+        if name == "zones-condor.zip":
+            from gpr_analyzer.report.exports import condor_zip
+            return condor_zip(self.survey(), out / name)
         return write_report(self.survey(), out / name, lang=self.lang)
 
     def export_line(self, line_id: str, fmt: str) -> Path:
