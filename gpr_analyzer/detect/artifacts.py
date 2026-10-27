@@ -3,6 +3,8 @@
 * vertical_stripe: a trace band whose energy differs from its neighbours through most of the
   depth range (antenna lift, surface change, operator stop). A real target is local in depth.
 * dead_trace / clipped_trace / stationary_traces: abnormal single traces or runs.
+* ringing: a time band where background removal left a speckled residue of the antenna's own
+  ringing (or another flat event) on most traces. It looks like a row of small bright spots.
 * bottom_noise: the incoherent tail of the record where a gain has amplified noise; red there
   in an energy view is gain, not a target.
 """
@@ -35,15 +37,21 @@ class ArtifactParams:
     dead_rms_ratio: float = 1e-3
     clip_run: int = 3
     stationary_diff_ratio: float = 0.25
-    stationary_min_traces: int = 3
+    stationary_min_traces: int = 6  # a few near-identical neighbours are common on quiet ground
     noise_coherence: float = 0.4
     noise_rise: float = 1.5  # noise envelope must grow by this factor to count as gained
     noise_min_fraction: float = 0.05
+    ringing_min_fraction: float = 0.15  # share of traces bright in short pieces, per time sample
+    ringing_segments: int = 5  # specks must be in all but one of this many equal parts of the line
+    ringing_short_traces: int = 15  # pieces shorter than this count as speckle; longer ones are reflectors
+    ringing_contrast: float = 4.0
+    ringing_max_periods: float = 3.0  # thicker bands of specks are crossing events, not ringing
+    ringing_factor: float = 2.0  # inside a band, contrast counts from this × the row's 90th percentile up
 
 
 def _flag(kind, n, a, b, t0, t1, th, en, strength=0.0) -> ArtifactFlag:
     prefix = {"vertical_stripe": "VS", "dead_trace": "DT", "clipped_trace": "CT",
-              "stationary_traces": "ST", "bottom_noise": "BN"}[kind]
+              "stationary_traces": "ST", "bottom_noise": "BN", "ringing": "RB"}[kind]
     return ArtifactFlag(f"{prefix}{n}", kind, int(a), int(b), float(t0), float(t1), th, en, float(strength))
 
 
@@ -176,6 +184,77 @@ def detect_bottom_noise(r: Radargram, params: ArtifactParams | None = None, *,
                   f"From {t0:.0f} ns down the record is gain-amplified incoherent noise; "
                   "high amplitude here is not a target",
                   float(region[-1] / base))]
+
+
+def ringing_rows(c: np.ndarray, top: int, params: ArtifactParams | None = None,
+                 skip: np.ndarray | None = None) -> np.ndarray:
+    """Boolean per time sample: rows where many traces are bright only in short, separate pieces.
+
+    A real reflector is bright over long runs of traces (or is local); a residue of flat ringing
+    after background removal is bright on a large share of traces but broken into specks, because
+    background removal leaves only the trace-to-trace jitter of it. skip: trace columns left out
+    (already flagged as stripes or dead traces).
+    """
+    p = params or ArtifactParams()
+    n_s, n_t = c.shape
+    keep = np.ones(n_t, dtype=bool) if skip is None else ~skip
+    bright = (c >= p.ringing_contrast) & keep[None, :]
+    out = np.zeros(n_s, dtype=bool)
+    if keep.sum() < p.ringing_segments * p.ringing_short_traces:
+        return out
+    seg = np.array_split(np.flatnonzero(keep), p.ringing_segments)
+    for i in np.flatnonzero(bright[:, keep].mean(axis=1) >= p.ringing_min_fraction):
+        if i < top:
+            continue
+        d = np.diff(np.concatenate(([0], bright[i].astype(np.int8), [0])))
+        starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
+        short = np.zeros(n_t, dtype=bool)
+        for a, b in zip(starts, ends):
+            if b - a < p.ringing_short_traces:
+                short[a:b] = True
+        # ringing is along the whole line; a field of rubble or crossing limbs is local
+        spread = sum(short[g].mean() >= p.ringing_min_fraction / 2 for g in seg) >= p.ringing_segments - 1
+        out[i] = short[keep].mean() >= p.ringing_min_fraction and spread
+    return out
+
+
+def detect_ringing(r: Radargram, c: np.ndarray, period: int, top: int,
+                   params: ArtifactParams | None = None, skip: np.ndarray | None = None) -> list[ArtifactFlag]:
+    """Time bands of ringing residue (see ringing_rows), widened by half a period each side. A band
+    thicker than ringing_max_periods is not ringing (that many rows of specks are crossing events)."""
+    p = params or ArtifactParams()
+    rows = ringing_rows(c, top, p, skip)
+    out = []
+    n_s, n_t = c.shape
+    for a, b in runs(rows, max_gap=max(1, period // 2)):
+        if b - a + 1 > p.ringing_max_periods * period:
+            continue
+        a, b = max(0, a - period // 2), min(n_s - 1, b + period // 2)
+        t0, t1 = a * r.dt_ns, b * r.dt_ns
+        out.append(_flag("ringing", len(out) + 1, 0, n_t - 1, t0, t1,
+                         f"แถบแนวนอน {t0:.1f}–{t1:.1f} ns เป็นจุดสว่างเล็ก ๆ เรียงตลอดเส้น น่าจะเป็น ringing ของเสาอากาศ"
+                         "ที่เหลือจากการลบพื้นหลัง ไม่ใช่เป้าหมาย",
+                         f"Horizontal band {t0:.1f}–{t1:.1f} ns of small bright specks along the line: likely antenna "
+                         "ringing left over by background removal, not a target"))
+    return out
+
+
+def suppress_ringing(c: np.ndarray, flags: list[ArtifactFlag], dt_ns: float,
+                     params: ArtifactParams | None = None) -> np.ndarray:
+    """Contrast with ringing bands scaled down, so only what stands well above the specks is bright
+    there: a pipe apex crossing the band stays, the specks drop below the threshold. Hyperbola apexes
+    and zones are then not pulled into the band."""
+    p = params or ArtifactParams()
+    out = c
+    for a in flags:
+        if a.kind != "ringing":
+            continue
+        if out is c:
+            out = c.copy()
+        s0, s1 = int(a.time_start_ns / dt_ns), int(a.time_end_ns / dt_ns) + 1
+        ref = p.ringing_factor * np.percentile(c[s0:s1], 90, axis=1, keepdims=True) / p.ringing_contrast
+        out[s0:s1] = c[s0:s1] / np.maximum(ref, 1.0)
+    return out
 
 
 def detect_artifacts(r: Radargram, params: ArtifactParams | None = None, *,

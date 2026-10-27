@@ -12,7 +12,7 @@ const TYPE = {
 const CONF = { high: "สูง", medium: "ปานกลาง", low: "ต่ำ", confirmed: "ยืนยันแล้ว" };
 const ACT = { E: "E ฉุกเฉิน", 1: "1 เร่งด่วน", 2: "2 ตรวจสอบเพิ่ม", 3: "3 เฝ้าระวัง", none: "ไม่ต้องดำเนินการ" };
 const REV = { auto: "ยังไม่ตรวจ", accepted: "ยอมรับแล้ว", edited: "แก้ไขแล้ว", rejected: "ปฏิเสธ" };
-const ART = { vertical_stripe: "แถบแนวตั้ง", bottom_noise: "noise ก้นภาพ", abnormal_trace: "trace ผิดปกติ", dead_trace: "trace ว่าง", stationary: "หยุดเดิน" };
+const ART = { vertical_stripe: "แถบแนวตั้ง", bottom_noise: "noise ก้นภาพ", ringing: "ringing แนวนอน", abnormal_trace: "trace ผิดปกติ", dead_trace: "trace ว่าง", stationary: "หยุดเดิน" };
 const STEP = { center_frequency: "ความถี่กลาง", dewow: "Dewow", time_zero: "Time-zero", bandpass: "Bandpass", background_removal: "Background removal",
   gain: "Gain (SEC)", velocity: "ความเร็วคลื่น", migration: "Migration", envelope: "Envelope / energy", agc_display: "AGC (แสดงผล)",
   display_qc: "ตรวจ trace (แสดงผล)", display_bandpass: "Bandpass อัตโนมัติ (แสดงผล)", display_background: "ลบพื้นหลังอัตโนมัติ (แสดงผล)",

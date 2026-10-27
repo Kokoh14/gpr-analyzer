@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.ndimage import maximum_filter
+from scipy.ndimage import find_objects, label, maximum_filter
 
 from gpr_analyzer.core import Radargram
 from gpr_analyzer.detect._signal import contrast_section
@@ -135,7 +135,22 @@ def find_hyperbolas(r: Radargram, params: HyperbolaParams | None = None,
             peaks[:, a.trace_start:a.trace_end + 1] = False
         elif a.kind == "bottom_noise":
             peaks[int(a.time_start_ns / r.dt_ns):] = False
-    ss, xs = np.nonzero(peaks)
+    # one candidate per plateau, plus its two ends: a flat bright roof would otherwise use up all
+    # candidates, and its corners are where edge diffractions start
+    plateaus, n_plat = label(peaks)
+    cand = []
+    for k, sl in enumerate(find_objects(plateaus), 1):
+        if sl is None:
+            continue
+        m = plateaus[sl] == k
+        sub = np.where(m, c[sl], -np.inf)
+        i, j = np.unravel_index(int(np.argmax(sub)), sub.shape)
+        cand.append((sl[0].start + i, sl[1].start + j))
+        if m.shape[1] > 2 * per:
+            for col in (0, m.shape[1] - 1):
+                cand.append((sl[0].start + int(np.argmax(sub[:, col])), sl[1].start + col))
+    ss = np.array([a for a, _ in cand], dtype=int)
+    xs = np.array([b for _, b in cand], dtype=int)
     order = np.argsort(-c[ss, xs])[: p.max_candidates]
     found: list[Hyperbola] = []
     taken = np.zeros_like(c, dtype=bool)
