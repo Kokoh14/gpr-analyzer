@@ -89,6 +89,8 @@ class ProcessingResult:
     autodisplay: Radargram | None = None  # automatic display filters (processing/autodisplay.py), display only
     log: list[StepLog] = field(default_factory=list)
     viewpoint: Radargram | None = None  # ViewPoint-like screen (processing/viewpoint.py), display only
+    options: ProcessingOptions | None = None  # exact inputs for workflow replay; never rounded log values
+    requested_tracks: list[str] | None = None
 
     def parameter_table(self) -> list[dict[str, Any]]:
         """Rows for the report's processing-parameters section."""
@@ -369,4 +371,6 @@ def run_pipeline(rg: Radargram, options: ProcessingOptions | None = None,
         autodisplay=_with_clip(mk(auto_disp, "autodisplay"), auto_clip) if auto_disp is not None else None,
         log=log,
         viewpoint=mk(vp.data, "viewpoint") if vp is not None else None,
+        options=ProcessingOptions(**asdict(opt)),
+        requested_tracks=sorted(tracks | {"analysis"}),
     )
