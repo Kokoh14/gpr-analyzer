@@ -160,6 +160,16 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         with j.lock:
             return guarded(scene3d.save_layout, j, body)
 
+    @app.post("/api/jobs/{job_id}/thick-slice")
+    def thick_slice(job_id: str, body: dict = Body(...)) -> dict:
+        from gpr_analyzer.app.thick_slice import render
+
+        j = job(job_id)
+        with j.lock:
+            frozen = scene3d.snapshot(j)
+        return guarded(render, frozen, body.get("top_m"), body.get("bottom_m"),
+                       body.get("contrast_db", 40), body.get("frame", "gps"))
+
     @app.post("/api/jobs/{job_id}/info")
     def set_info(job_id: str, body: dict = Body(...)) -> dict:
         j = job(job_id)
