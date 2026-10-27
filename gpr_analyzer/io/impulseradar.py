@@ -160,7 +160,7 @@ def read_cor(path: str | Path) -> list[dict]:
             trace = int(float(parts[0]))
             lat = float(parts[3]) * (-1 if parts[4].upper() == "S" else 1)
             lon = float(parts[5]) * (-1 if parts[6].upper() == "W" else 1)
-        except ValueError:
+        except (ValueError, OverflowError):
             continue
         row = {"trace": trace, "date": parts[1], "time": parts[2], "lat": lat, "lon": lon}
         if len(parts) > 7:
@@ -169,7 +169,10 @@ def read_cor(path: str | Path) -> list[dict]:
             except ValueError:
                 pass
         if len(parts) > 9:
-            row["quality"] = parts[9]  # GPS fix quality (4 = RTK fixed)
+            try:
+                row["quality"] = int(parts[9])
+            except ValueError:
+                pass
         rows.append(row)
     return rows
 

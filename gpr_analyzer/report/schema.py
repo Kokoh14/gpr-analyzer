@@ -85,6 +85,8 @@ class Zone:
     note: str = ""
     ground_truth: dict[str, Any] | None = None  # {"method": "drill", "date": ..., "result": ...}
     antenna_separation_m: float = 0.0
+    surface_elevation_start_m: float | None = None  # recorded surface altitude, not target depth
+    surface_elevation_end_m: float | None = None
 
     def __post_init__(self) -> None:
         _check(self.suspected_type, ZONE_TYPES, "Zone.suspected_type")

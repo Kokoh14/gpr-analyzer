@@ -67,7 +67,7 @@ def test_mrk_and_cor_keep_elevation_and_quality(tmp_path):
     cor = tmp_path / "L_0057.cor"
     cor.write_text("16\t2026-10-22\t14:44:43:000\t13.5602538090\tN\t100.6113348308\tE\t-27.53\tM\t4\n", encoding="latin-1")
     (g,) = read_cor(cor)
-    assert (g["lat"], g["elevation"], g["quality"]) == (13.560253809, -27.53, "4")
+    assert (g["lat"], g["elevation"], g["quality"]) == (13.560253809, -27.53, 4)
     assert kml.profile_name("L_0057_0.iprh") == "L_0057" and kml.profile_number("L_0057") == "57"
 
 

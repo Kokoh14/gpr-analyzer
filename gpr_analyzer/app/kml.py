@@ -189,7 +189,7 @@ def job_profiles(lines: list[Any]) -> tuple[list[Profile], dict[str, tuple[Any, 
                 img = f"AutoScreenShots/GPR_{n}.{k}.jpg"
                 p.zones.append(Mark(
                     name=f"GPR: {n}.{k}", lat=float(pos[0][c]), lon=float(pos[1][c]), standard=ZONE_STYLE[0],
-                    index=ZONE_STYLE[1], alt=fix.get("elevation"), depth_m=z.depth_top_m, status=fix.get("quality", ""),
+                    index=ZONE_STYLE[1], alt=fix.get("elevation"), depth_m=z.depth_top_m, status=str(fix.get("quality", "")),
                     image=img, type_name=tname, information=info,
                     extra=[("Zone", f"{ln.line_id} {z.zone_id}" + (f" ({mhz:g} MHz)" if mhz else "")),
                            ("Suspected type", z.suspected_type), ("Confidence", z.confidence), ("Review", z.review)]))

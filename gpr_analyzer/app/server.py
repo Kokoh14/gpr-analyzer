@@ -20,6 +20,8 @@ from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
 
 STATIC = Path(__file__).parent / "static"
 MEDIA = {".pdf": "application/pdf", ".html": "text/html; charset=utf-8", ".csv": "text/csv; charset=utf-8",
+         ".cnf": "text/plain; charset=utf-8", ".pobj": "text/plain; charset=utf-8",
+         ".lobj": "text/plain; charset=utf-8", ".zip": "application/zip",
          ".json": "application/json", ".sgy": "application/octet-stream",
          ".kml": "application/vnd.google-earth.kml+xml", ".kmz": "application/vnd.google-earth.kmz",
          ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
@@ -161,6 +163,16 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         with j.lock:
             return guarded(scene3d.save_layout, j, body)
 
+    @app.post("/api/jobs/{job_id}/thick-slice")
+    def thick_slice(job_id: str, body: dict = Body(...)) -> dict:
+        from gpr_analyzer.app.thick_slice import render
+
+        j = job(job_id)
+        with j.lock:
+            frozen = scene3d.snapshot(j)
+        return guarded(render, frozen, body.get("top_m"), body.get("bottom_m"),
+                       body.get("contrast_db", 40), body.get("frame", "gps"))
+
     @app.post("/api/jobs/{job_id}/info")
     def set_info(job_id: str, body: dict = Body(...)) -> dict:
         j = job(job_id)
@@ -249,6 +261,35 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         return j.to_json()
 
     # ---------------------------------------------------------- comparison with reference software
+    @app.get("/api/jobs/{job_id}/lines/{line_id}/workflow.json")
+    def workflow_export(job_id: str, line_id: str) -> Response:
+        import json
+        from gpr_analyzer.processing.workflows import export_workflow
+
+        j = job(job_id)
+        with j.lock:
+            ln = guarded(j.line, line_id)
+            document = guarded(export_workflow, ln.result, ln.options)
+        return Response(json.dumps(document, ensure_ascii=False, indent=2), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{line_id}-workflow.json"'})
+
+    @app.post("/api/workflows/validate")
+    def workflow_validate(body: dict = Body(...)) -> dict:
+        from gpr_analyzer.processing.workflows import load_workflow
+        from dataclasses import asdict
+
+        opt, tracks = guarded(load_workflow, body)
+        return {"options": asdict(opt), "tracks": sorted(tracks)}
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/workflows/compare")
+    def workflow_compare(job_id: str, line_id: str, body: dict = Body(...)) -> dict:
+        from gpr_analyzer.app.workflows import compare_workflows
+
+        j = job(job_id)
+        with j.lock:
+            raw = guarded(j.line, line_id).raw
+        return guarded(compare_workflows, raw, body.get("left"), body.get("right"))
+
     def ref_route(job_id: str, fn, *a: Any) -> dict:
         j = job(job_id)
         with j.lock:

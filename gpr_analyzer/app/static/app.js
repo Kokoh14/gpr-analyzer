@@ -152,6 +152,7 @@ function renderScan() {
       <td><b>${esc(l.name)}</b><br><span class="small muted">${esc(l.antenna || l.family)}${l.date ? " · " + esc(l.date) : ""}</span></td>
       <td>${l.n_traces ?? "–"}</td><td>${l.length_m != null ? fmt(l.length_m, 1) + " m" : "–"}</td>
       <td>${l.gps_fixes ? `${l.gps_fixes} จุด` + (l.length_gps_m != null ? `<br><span class="small muted">${fmt(l.length_gps_m, 1)} m</span>` : "") : `<span class="muted">ไม่มี</span>`}</td>
+      <td class="small">${fmt(l.positioning?.gps_points_per_m, 2)} · ${fmt(l.positioning?.traces_per_m, 1)}<br>${esc(l.positioning?.start_time || "–")}<br>${esc(l.positioning?.end_time || "–")}</td>
       <td>${l.markers || 0}</td>
       <td class="range"><input type="number" step="0.1" min="0" data-range="${i}:0" placeholder="0" value="${l.range?.[0] ?? ""}" ${l.dx_m ? "" : "disabled"}>–
         <input type="number" step="0.1" min="0" data-range="${i}:1" placeholder="${l.length_m != null ? fmt(l.length_m, 1) : ""}" value="${l.range?.[1] ?? ""}" ${l.dx_m ? "" : "disabled"}></td>
@@ -178,8 +179,22 @@ function drawScanMap() {
   }
   S.scanLayer.clearLayers();
   const col = { ok: "#2f9e44", warn: "#e8590c", error: "#c92a2a" };
+  const metric = $("#scanMetric").value;
+  const values = lines.flatMap(l => (l.positioning?.segments || []).map(s => s[metric])).filter(v => v != null && Number.isFinite(v));
+  const lo = values.reduce((a, b) => Math.min(a, b), Infinity), hi = values.reduce((a, b) => Math.max(a, b), -Infinity);
+  $("#scanLegend").textContent = metric === "status" || !values.length ? "" : `${fmt(lo, 2)} (แดง) → ${fmt(hi, 2)} (เขียว) · ระยะวงล้อ; เส้นประ = จุด GPS ห่าง >5 m`;
   S.scan.lines.forEach((l, i) => {
     if (!l.track) return;
+    if (metric !== "status" && l.positioning?.segments.length) {
+      for (const seg of l.positioning.segments) {
+        const v = seg[metric], t = hi > lo ? (v - lo) / (hi - lo) : 1;
+        L.polyline(seg.points, {color: v == null ? "#868e96" : `hsl(${120 * t},75%,45%)`, weight: 4,
+          opacity: l.include ? 1 : .3, dashArray: seg.gap ? "5 5" : null}).addTo(S.scanLayer)
+          .bindTooltip(`${esc(l.name)} · ${fmt(v, 2)} ${metric === "gps_points_per_m" ? "points/m" : "traces/m"}`);
+      }
+      for (const turn of l.positioning.sharp_turns) L.circleMarker(turn.point, {radius: 7, color: "#e8590c"}).addTo(S.scanLayer).bindTooltip(`เลี้ยว ${turn.angle_deg}°`);
+      return;
+    }
     L.polyline(l.track, { color: "#fff", weight: 6, opacity: l.include ? 0.9 : 0.3 }).addTo(S.scanLayer);
     const pl = L.polyline(l.track, { color: col[l.status], weight: 3, opacity: l.include ? 1 : 0.4, dashArray: l.include ? null : "4 4" })
       .addTo(S.scanLayer).bindTooltip(`${esc(l.name)} · ${l.length_m != null ? fmt(l.length_m, 1) + " m" : ""} · ${LEVEL[l.status][0]}`, { sticky: true });
@@ -1261,3 +1276,5 @@ $("#autoBtn").addEventListener("click", () => reprocess({}));
   if (id) await openJob(id);
   else loadPastJobs();
 })();
+
+$("#scanMetric").addEventListener("change", drawScanMap);
