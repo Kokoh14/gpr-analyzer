@@ -36,6 +36,7 @@ from gpr_analyzer.core import Radargram, crop_to_range
 from gpr_analyzer.detect import analyze_line, to_report_records
 from gpr_analyzer.detect import crossline
 from gpr_analyzer.io import read as read_file
+from gpr_analyzer.io.ids import is_ids_dt
 from gpr_analyzer.processing import ProcessingOptions, ProcessingResult, run_pipeline
 from gpr_analyzer.report import write_report
 from gpr_analyzer.report.compose import Signoff
@@ -398,13 +399,14 @@ class Job:
             if r is not None:
                 lo, hi = (None if v in (None, "") else float(v) for v in r)
                 r = None if lo is None and hi is None else [lo, hi]
-            self.plan.append({"index": len(self.plan), "primary": str(g.primary), "name": g.primary.name,
+            self.plan.append({"index": len(self.plan), "primary": str(g.primary),
+                              "name": g.stem if g.family == "ids" else g.primary.name,
                               "family": g.family, "companions": [str(c) for c in g.companions], "range_m": r,
                               "state": "waiting", "step": "", "line_ids": [], "error": None})
         self.unassigned = [_companion(p) for p in s.unassigned]
         self.problems = [{"file": p.name, "error": "unknown_format"} for p in s.unassigned
                          if p.suffix.lower() not in {".txt", ".csv", ".cor", ".gps", ".xml", ".ini", ".json", ".log",
-                                                      ".mrk", ".time", ".tmf"}]
+                                                      ".mrk", ".time", ".tmf", ".mis"}]
         if not self.plan and not self.problems:
             self.problems.append({"file": "", "error": "no_files"})
         self.progress = {"state": "waiting", "started": None, "finished": None}
@@ -1428,6 +1430,12 @@ STEPS_PER_LINE = 15  # run_pipeline steps + detection, for the progress bar
 def _stamp(p: Path) -> list[dict[str, Any]]:
     """Data/header plus channel-specific and shared navigation dependencies, with their names."""
     out = []
+    if is_ids_dt(p):  # an IDS line is every LIccpppp.dt part plus the GPS files of its folder
+        for q in sorted(p.parent.iterdir()):
+            if is_ids_dt(q) or (q.suffix.lower() == ".gps" and q.stem.upper().startswith("LI")):
+                st = q.stat()
+                out.append({"name": q.name, "size": st.st_size, "mtime_ns": st.st_mtime_ns})
+        return out
     stems = {p.stem.lower()}
     if p.stem.endswith(("_0", "_1")):
         stems.add(p.stem[:-2].lower())

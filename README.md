@@ -9,7 +9,7 @@ and produce a report.
 | Package | Purpose |
 |---|---|
 | `gpr_analyzer/core.py` | `Radargram` data model shared by everything (data shape = samples × traces) |
-| `gpr_analyzer/io/` | File readers (ImpulseRadar, GSSI DZT, MALA, Sensors & Software, SEG-Y) + format sniffer |
+| `gpr_analyzer/io/` | File readers (ImpulseRadar, IDS .ZON zones, GSSI DZT, MALA, Sensors & Software, SEG-Y) + format sniffer |
 | `gpr_analyzer/processing/` | Dewow, time-zero, bandpass, background removal, gain, migration, attributes |
 | `gpr_analyzer/detect/` | Anomaly detection, artifact flags, rule-based scoring |
 | `gpr_analyzer/report/` | PDF / Word / HTML report, CSV / JSON / GeoJSON zone exports (see `docs/report.md`) |
@@ -38,7 +38,8 @@ pytest
 ## Rules
 
 - Input is ImpulseRadar (`.iprh` + `.iprb`, with `.cor` GPS and `.mrk` markers); reference software is ImpulseRadar
-  ViewPoint and GeoLitix.
+  ViewPoint and GeoLitix. IDS zones (`.ZON` folders of `LIccpppp.dt` parts + `LI01pppp.GPS`) are also read; that
+  layout was worked out from our own survey files (see `gpr_analyzer/io/ids.py`).
 - **Clean-room** for reference software: we only decode our own data files and compare against what the programs
   show on screen or export. Never read or disassemble their code or touch their licensing.
 - GPL projects (readgssi, RGPR) are reference only; do not copy code. GPRPy is MIT.

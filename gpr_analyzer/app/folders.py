@@ -9,7 +9,8 @@ the small GPS / marker files, so a survey of many lines is checked in seconds:
   holds whole traces and agrees with LAST TRACE;
 - the .cor GPS covers the line (first/last fix near the ends, no long gaps) and its length agrees with
   the wheel distance;
-- markers (.mrk) are counted; files that belong to no line are listed.
+- markers (.mrk) are counted; files that belong to no line are listed;
+- an IDS zone (.ZON folder) has the same parts for every channel and its GPS covers the line.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from gpr_analyzer.app import geo
 from gpr_analyzer.app.positioning import positioning_qa
 from gpr_analyzer.app.files import FAMILIES, sort_files
 from gpr_analyzer.io._util import parse_key_value_header, read_text, to_float
+from gpr_analyzer.io.ids import read_gga, read_ids_header, zone_parts
 from gpr_analyzer.io.impulseradar import _side_file, read_cor, read_mrk
 
 MAX_FILES = 5000
@@ -190,6 +192,53 @@ def check_impulseradar(primary: Path) -> dict[str, Any]:
     return out
 
 
+def check_ids(primary: Path) -> dict[str, Any]:
+    """Channels, parts, length and GPS of one IDS zone from the part headers and .GPS files.
+
+    The map track places the n-th GPS fix of a part evenly along that part (the exact trace of each fix
+    is only known after reading the data, which processing does).
+    """
+    parts = zone_parts(primary.parent)
+    out: dict[str, Any] = {"issues": []}
+    iss = out["issues"]
+    heads = {ch: [read_ids_header(p) for p in files] for ch, files in parts.items()}
+    counts = {ch: sum(h["n_traces"] for h in hs) for ch, hs in heads.items()}
+    first = heads[min(heads)][0]
+    n_traces, dx = counts[min(counts)], first.get("dx_m")
+    out.update({"n_traces": n_traces, "n_samples": first["n_samples"], "channels": len(parts),
+                "parts": len(parts[min(parts)]), "dx_m": dx, "length_m": round(n_traces * dx, 2) if dx else None,
+                "time_window_ns": round(first["window_ns"], 1), "date": first.get("date", ""),
+                "antenna": f"{first['freq_mhz']:g} MHz" if first.get("freq_mhz") else "",
+                "data_mb": round(sum(p.stat().st_size for fs in parts.values() for p in fs) / 1e6, 1)})
+    if len(set(counts.values())) > 1:
+        iss.append(_issue("warn", "channel_mismatch", "จำนวน trace แต่ละช่องไม่เท่ากัน: "
+                          + ", ".join(f"ช่อง {c}: {n}" for c, n in counts.items())))
+    if not dx:
+        iss.append(_issue("warn", "no_spacing", "ไม่มีระยะห่าง trace (แสดงระยะเป็นเมตรไม่ได้)"))
+    rows, offset = [], 0
+    for p, h in zip(parts[min(parts)], heads[min(heads)]):
+        gps = next((q for q in p.parent.glob(p.stem + ".*") if q.suffix.lower() == ".gps"), None)
+        fixes = read_gga(gps) if gps is not None else []
+        step = h["n_traces"] / max(len(fixes), 1)
+        rows += [{"trace": int(offset + k * step), **f} for k, f in enumerate(fixes) if f and f["quality"] > 0]
+        offset += h["n_traces"]
+    out["gps_fixes"] = len(rows)
+    out["positioning"] = positioning_qa(rows, n_traces, dx)
+    pos = geo.trace_positions(rows, max(n_traces, 1)) if len(rows) >= 2 else None
+    if pos is None:
+        iss.append(_issue("warn", "no_gps", "ไม่มีไฟล์ GPS (.GPS) ที่ใช้ได้ วางบนแผนที่ไม่ได้"))
+    else:
+        lat, lon = pos
+        idx = sorted(set(np.linspace(0, n_traces - 1, min(n_traces, 200)).astype(int).tolist()))
+        out["track"] = [[round(float(lat[i]), 7), round(float(lon[i]), 7)] for i in idx]
+        out["length_gps_m"] = round(geo.path_length_m(lat, lon), 2)
+        if out["length_m"] and abs(out["length_gps_m"] - out["length_m"]) > LENGTH_MISMATCH_WARN * out["length_m"] + 1.0:
+            iss.append(_issue("warn", "length_mismatch",
+                              f"ความยาวตาม GPS {out['length_gps_m']:.1f} m ต่างจากล้อวัดระยะ {out['length_m']:.1f} m"))
+    out["markers"] = 0
+    return out
+
+
 def scan_folder(path: str | Path, recursive: bool = False) -> dict[str, Any]:
     """Lines found in a folder with a completeness check each (headers and side files only)."""
     files = folder_files(path, recursive)
@@ -198,9 +247,9 @@ def scan_folder(path: str | Path, recursive: bool = False) -> dict[str, Any]:
     for g in sorted(s.groups, key=lambda g: str(g.primary).lower()):
         row: dict[str, Any] = {"name": g.stem, "family": g.family, "primary": str(g.primary),
                                "folder": str(g.primary.parent), "files": sorted(p.name for p in g.members + g.companions)}
-        if g.family == "impulseradar":
+        if g.family in ("impulseradar", "ids"):
             try:
-                row.update(check_impulseradar(g.primary))
+                row.update(check_impulseradar(g.primary) if g.family == "impulseradar" else check_ids(g.primary))
             except Exception as e:  # noqa: BLE001 - shown per line
                 row["issues"] = [_issue("error", "unreadable", f"อ่านไม่ได้: {type(e).__name__}: {e}")]
         else:

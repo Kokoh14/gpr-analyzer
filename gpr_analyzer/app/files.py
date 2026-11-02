@@ -5,6 +5,9 @@ The readers find the partner next to the file they are given, so every upload go
 folder with its original name and each pair is read once, from its header file.
 Anything else (.txt notes, .cor GPS, .mrk markers, unknown binaries) is kept as a companion
 and attached to the line with the same file stem.
+IDS zones are the exception: all LIccpppp.dt files of one folder (channels and parts) are one line,
+named after the folder, the other files of that folder are its companions, and files in its
+sub-folders (camera pictures, SRSv2_Data) are left out.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from gpr_analyzer.io.ids import is_ids_dt, zone_name
+
 # extension -> (family, preference); within a family and stem the lowest preference is read
 FAMILIES = {
     ".iprh": ("impulseradar", 0), ".iprb": ("impulseradar", 1),
@@ -20,6 +25,7 @@ FAMILIES = {
     ".hd": ("sensoft", 0), ".dt1": ("sensoft", 1),
     ".dzt": ("gssi", 0),
     ".sgy": ("segy", 0), ".segy": ("segy", 0),
+    ".dt": ("ids", 0),
 }
 TEXT_EXTENSIONS = {".txt", ".csv", ".ini", ".xml", ".json", ".log"}
 
@@ -51,9 +57,16 @@ class Sorted:
 def sort_files(paths: list[Path]) -> Sorted:
     groups: dict[tuple[str, str], InputGroup] = {}
     others: list[Path] = []
+    zones: dict[Path, InputGroup] = {}
     for p in sorted(paths, key=lambda q: q.name.lower()):
+        if is_ids_dt(p):
+            g = zones.get(p.parent)
+            if g is None:
+                g = zones[p.parent] = InputGroup(stem=zone_name(p), family="ids", primary=p)
+            g.members.append(p)
+            continue
         fam = FAMILIES.get(p.suffix.lower())
-        if fam is None:
+        if fam is None or fam[0] == "ids":
             others.append(p)
             continue
         key = (p.stem.lower(), fam[0])
@@ -69,12 +82,17 @@ def sort_files(paths: list[Path]) -> Sorted:
         by_stem.setdefault(g.stem.lower(), []).append(g)
     unassigned = []
     for p in others:
+        zone = next((zones[d] for d in p.parents if d in zones), None)
+        if zone is not None:
+            if p.parent in zones:
+                zone.companions.append(p)
+            continue
         owners = by_stem.get(p.stem.lower())
         if owners:
             owners[0].companions.append(p)
         else:
             unassigned.append(p)
-    return Sorted(groups=list(groups.values()), unassigned=unassigned)
+    return Sorted(groups=list(groups.values()) + list(zones.values()), unassigned=unassigned)
 
 
 def preview_text(path: Path, limit: int = 4000) -> str | None:

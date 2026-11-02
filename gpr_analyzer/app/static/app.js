@@ -24,7 +24,7 @@ const VIEWS = [
   ["viewpoint", "แบบหน้าจอ ViewPoint (ImpulseRadar)", "เลียนแบบภาพของ ViewPoint ใช้เทียบกับโปรแกรมของเครื่อง ใช้ดูเท่านั้น"],
   ["autodisplay", "ฟิลเตอร์อัตโนมัติ (ใช้ดูเท่านั้น)", "โปรแกรมเลือก bandpass, ลบพื้นหลัง, gain และ contrast จากข้อมูลเส้นนี้เอง ดูค่าที่เลือกในตารางขั้นตอนประมวลผล gain เท่ากันทุก trace จึงเทียบความแรงตามแนวยาวได้"],
 ];
-const FAMILY = { iprh: "header", iprb: "data", rad: "header", rd3: "data", rd7: "data", hd: "header", dt1: "data", dzt: "data", sgy: "data", segy: "data" };
+const FAMILY = { iprh: "header", iprb: "data", rad: "header", rd3: "data", rd7: "data", hd: "header", dt1: "data", dzt: "data", sgy: "data", segy: "data", dt: "data" };
 const COMPANION = ["txt", "cor", "gps", "csv", "xml", "ini", "json", "log", "tmf", "mrk"];
 
 const REF_DRAW = "__ref__";  // S.drawFor value while drawing a reference pick
