@@ -9,6 +9,7 @@ from pathlib import Path
 
 from gpr_analyzer.core import Radargram, crop_to_range
 from gpr_analyzer.io.gssi import read_dzt
+from gpr_analyzer.io.ids import read_ids
 from gpr_analyzer.io.impulseradar import read_cor, read_impulseradar, read_mala
 from gpr_analyzer.io.segy import read_segy, write_segy
 from gpr_analyzer.io.sensoft import read_dt1
@@ -25,6 +26,7 @@ READERS = {
     ".dt1": read_dt1,
     ".sgy": read_segy,
     ".segy": read_segy,
+    ".dt": read_ids,
 }
 
 SUPPORTED_EXTENSIONS = tuple(sorted(READERS))
@@ -57,6 +59,7 @@ __all__ = [
     "read_dzt",
     "read_dt1",
     "read_segy",
+    "read_ids",
     "write_segy",
     "write",
     "READERS",
