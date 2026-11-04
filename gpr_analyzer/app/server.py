@@ -121,6 +121,10 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         j = store.new()
         j.source_folder = str(Path(path).expanduser())
         j.ids_ballast_dir = str(Path(ballast).expanduser()) if ballast else ""
+        structures = str(body.get("structures_kml") or "").strip()
+        if structures and not Path(structures).expanduser().is_file():
+            raise HTTPException(400, f"not a file: {structures}")
+        j.structures_kml = str(Path(structures).expanduser()) if structures else ""
         if body.get("info"):
             with j.lock:
                 guarded(j.set_info, body["info"])

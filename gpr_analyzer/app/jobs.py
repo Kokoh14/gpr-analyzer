@@ -30,10 +30,10 @@ from weakref import WeakValueDictionary
 import numpy as np
 
 from gpr_analyzer.app import compare as cmp
-from gpr_analyzer.app import geo, kml
+from gpr_analyzer.app import geo, gps_lag, kml
 from gpr_analyzer.app.chainage import fmt_km, km_at_trace
 from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
-from gpr_analyzer.core import Radargram, crop_to_range
+from gpr_analyzer.core import Radargram, crop_metadata, crop_to_range
 from gpr_analyzer.detect import analyze_line, to_report_records
 from gpr_analyzer.detect import crossline
 from gpr_analyzer.io import read as read_file
@@ -369,6 +369,7 @@ class Job:
     comparison: dict[str, Any] = field(default_factory=cmp.new_state)  # see compare.py
     source_folder: str = ""  # survey read in place from this folder ("" = files uploaded into uploads/)
     ids_ballast_dir: str = ""  # folder of IDS automatic ballast CSVs shown under IDS lines ("" = none)
+    structures_kml: str = ""  # bridges/culverts KML that sets the GPS lag of each IDS zone ("" = no correction)
     plan: list[dict[str, Any]] = field(default_factory=list)
     progress: dict[str, Any] = field(default_factory=lambda: {"state": "done"})
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -376,6 +377,7 @@ class Job:
     _log_tail: list[str] = field(default_factory=list, repr=False)
     _pending_lines: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
     _ballast_idx: dict[Path, dict[tuple[int, int], Path]] | None = field(default=None, repr=False)
+    _lags: dict[str, tuple | None] = field(default_factory=dict, repr=False)  # gps_lag.zone_lag() by zone folder
     _hash_cache: dict[tuple, str] = field(default_factory=dict, repr=False)  # input file SHA-256 by (path, size, mtime)
 
     @property
@@ -501,14 +503,23 @@ class Job:
             self._entry_failed(e, f"{type(ex).__name__}: {ex}")
             return
         comps = [_companion(Path(c)) for c in e["companions"] if Path(c).exists()]
+        lag = self._gps_lag(primary) if e["family"] == "ids" and self.structures_kml else None
+        chain = e.get("chainage")
+        if lag and chain:
+            chain = [[t - lag[0], k] for t, k in chain]
         ids = []
         for ch, rg in enumerate(rgs):
+            if lag:  # the zone's shifted fixes, cropped like the data (keeps the anchors past both ends)
+                c = rg.metadata.get("crop")
+                gps = crop_metadata({"gps": lag[1]}, c["trace_start"], c["trace_end"], c["n_traces_file"],
+                                    rg.dx_m or 0.0)["gps"] if c else lag[1]
+                rg.metadata.update(gps=gps, gps_lag_traces=lag[0])
             line_id = f"L{e['index'] + 1}" if len(rgs) == 1 else f"L{e['index'] + 1}-ch{ch + 1}"
             offset = rg.metadata.get("crop", {}).get("trace_start", 0)
             if e["family"] == "ids" and self.ids_ballast_dir:
                 self._attach_ids_ballast(primary, rg, offset)
-            if e.get("chainage"):
-                rg.metadata.update(chainage=e["chainage"], sections=", ".join(e.get("sections", [])))
+            if chain:
+                rg.metadata.update(chainage=chain, sections=", ".join(e.get("sections", [])))
             ln = LineState(line_id=line_id, source_file=primary.name, channel=ch + 1 if len(rgs) > 1 else None,
                            raw=rg, companions=comps, trace_offset=offset)
             saved = self._pending_lines.get(line_id)
@@ -534,6 +545,24 @@ class Job:
         with self.lock:
             e.update(state="done", step="", line_ids=ids)
             self.save()
+
+    def _gps_lag(self, primary: Path) -> tuple[int, list[dict[str, Any]]] | None:
+        """(GPS lag in traces, the zone's shifted GPS rows) of the IDS zone holding primary, measured once per zone."""
+        key = str(primary.parent)
+        if key not in self._lags:
+            self.log(f"{primary.parent.name}: วัดค่าเลื่อน GPS จากตำแหน่งสะพาน")
+            try:
+                self._lags[key] = gps_lag.zone_lag(primary, gps_lag.read_points(self.structures_kml))
+            except Exception as ex:  # noqa: BLE001 - the correction is optional; say why it is missing
+                self.log(f"{primary.parent.name}: วัดค่าเลื่อน GPS ไม่ได้ ({type(ex).__name__}: {ex})")
+                self._lags[key] = None
+                return None
+            r = self._lags[key]
+            dx = read_ids_header(primary).get("dx_m") or 0.0
+            self.log(f"{primary.parent.name}: เลื่อนตำแหน่ง GPS กลับ {r[0] * dx:.1f} ม. (วัดจากสะพาน {r[1]} แห่ง)" if r else
+                     f"{primary.parent.name}: พบสะพานตรงกันไม่ถึง {gps_lag.MIN_MATCHES} แห่ง จึงไม่เลื่อนตำแหน่ง GPS")
+        r = self._lags[key]
+        return (r[0], r[2]) if r else None
 
     def _attach_ids_ballast(self, primary: Path, rg: Radargram, offset: int) -> None:
         """The IDS automatic ballast classes of this channel, per trace range of this line."""
@@ -893,7 +922,7 @@ class Job:
         state = {
             "version": 2, "job_id": self.job_id, "created": self.created, "saved": _now(), "info": asdict(self.info),
             "lang": self.lang, "reviewer": self.reviewer, "source_folder": self.source_folder,
-            "ids_ballast_dir": self.ids_ballast_dir,
+            "ids_ballast_dir": self.ids_ballast_dir, "structures_kml": self.structures_kml,
             "plan": self.plan, "progress": self.progress, "problems": self.problems, "unassigned": self.unassigned,
             "lines": [{"line_id": ln.line_id, "source_file": ln.source_file, "options": options_dict(ln.options),
                        "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones, "sections": ln.sections,
@@ -927,6 +956,7 @@ class Job:
         job.comparison = cmp.upgrade_state(st.get("comparison") or cmp.new_state())
         job.source_folder = st.get("source_folder", "")
         job.ids_ballast_dir = st.get("ids_ballast_dir", "")
+        job.structures_kml = st.get("structures_kml", "")
         if "plan" not in st:  # version 1: no plan or checkpoints yet
             job.load(sorted(p for p in job.upload_dir.iterdir() if p.is_file()))
         else:

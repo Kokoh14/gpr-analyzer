@@ -247,8 +247,11 @@ async function runFolder() {
       buffer_km: (+$("#secBuf").value || 0) / 1000 } : null;
     const idsCsv = $("#idsCsv").value.trim();
     keep("lastIdsCsv", idsCsv);
+    const structKml = $("#structKml").value.trim();
+    keep("lastStructKml", structKml);
     S.job = await post("/api/jobs/from-folder", { path: S.scan.path, recursive: S.scan.recursive, include: sel.map((l) => l.primary), ranges, info,
-      ...(secs ? { sections: secs } : {}), ...(idsCsv ? { ids_ballast_dir: idsCsv } : {}) });
+      ...(secs ? { sections: secs } : {}), ...(idsCsv ? { ids_ballast_dir: idsCsv } : {}),
+      ...(structKml ? { structures_kml: structKml } : {}) });
     S.job = await post(`/api/jobs/${S.job.job_id}/info`, info);
     openProgress();
   } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
@@ -1358,6 +1361,7 @@ $("#folderPath").value = store("lastFolder", "");
 $("#secBtn").addEventListener("click", matchSections);
 $("#secKml").value = store("lastKml", "");
 $("#idsCsv").value = store("lastIdsCsv", "");
+$("#structKml").value = store("lastStructKml", "");
 $("#toReview").addEventListener("click", async () => { S.job = await api(jobUrl("")); openReview(); });
 $("#resumeBtn").addEventListener("click", resumeJob);
 $("#demoBtn").addEventListener("click", runDemo);
