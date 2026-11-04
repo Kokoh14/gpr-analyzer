@@ -115,8 +115,12 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
                         set(sec.get("ids") or []), float(sec.get("buffer_km", 0.1)))
             windows = chainage.plan_windows(m)
             include = set(windows)
+        ballast = str(body.get("ids_ballast_dir") or "").strip()
+        if ballast and not Path(ballast).expanduser().is_dir():
+            raise HTTPException(400, f"not a folder: {ballast}")
         j = store.new()
         j.source_folder = str(Path(path).expanduser())
+        j.ids_ballast_dir = str(Path(ballast).expanduser()) if ballast else ""
         if body.get("info"):
             with j.lock:
                 guarded(j.set_info, body["info"])

@@ -244,8 +244,10 @@ async function runFolder() {
     const info = infoValues($("#infoForm"));
     const secs = chosenSections().length ? { kml: $("#secKml").value.trim(), ids: chosenSections().map((s) => s.id),
       buffer_km: (+$("#secBuf").value || 0) / 1000 } : null;
+    const idsCsv = $("#idsCsv").value.trim();
+    keep("lastIdsCsv", idsCsv);
     S.job = await post("/api/jobs/from-folder", { path: S.scan.path, recursive: S.scan.recursive, include: sel.map((l) => l.primary), ranges, info,
-      ...(secs ? { sections: secs } : {}) });
+      ...(secs ? { sections: secs } : {}), ...(idsCsv ? { ids_ballast_dir: idsCsv } : {}) });
     S.job = await post(`/api/jobs/${S.job.job_id}/info`, info);
     openProgress();
   } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
@@ -406,13 +408,41 @@ function renderLine() {
       </div>
       <div class="scroll h" data-scroll="x" title="เลื่อนตามแนวสำรวจ"><div class="thumb"></div></div>
       <div class="xaxis" data-axis="x"></div>
-    </div>`).join("") || `<p class="muted">เลือกภาพที่จะแสดงด้านบน</p>`;
+    </div>`).join("") + idsStrip(l) || `<p class="muted">เลือกภาพที่จะแสดงด้านบน</p>`;
+  drawIdsStrip(l);
   applyZoom();
   showDepthRange();
   renderLineStatus(l);
   renderRecipe(l);
   renderCards(l);
   renderCompare(l);
+}
+// IDS automatic ballast classes (from the IDS software's CSVs) under the radargram, for reference
+const IDS_ROWS = [["fouling", "Fouling", 4, 3], ["moisture_base", "ชื้นฐาน", 2, 254], ["ballast_moisture", "ชื้นหิน", 3, 254], ["undulation", "คลื่น", 5, 2]];
+function idsStrip(l) {
+  if (!l.ids_ballast?.length) return "";
+  return `<div class="pane ids-strip"><div class="pane-cap"><b>ค่าจากซอฟต์แวร์ IDS (Ballast CSV)</b>
+      <span class="muted">แดง/สีเข้ม = ค่ามาก · เทา = ไม่มีค่า · เลขเป็นของ IDS (ยังไม่มีคำอธิบาย) ชี้เมาส์เพื่อดูค่า</span></div>
+    <div class="plot"><div class="yaxis left">${IDS_ROWS.map(([, lab], i) => `<span style="top:${(i + 0.5) * 25}%">${lab}</span>`).join("")}</div>
+      <div class="stripwrap"><div class="xzoom"><canvas id="idsCanvas"></canvas></div></div><div></div><div></div></div></div>`;
+}
+function drawIdsStrip(l) {
+  const c = $("#idsCanvas"); if (!c) return;
+  const W = Math.min(l.n_traces, 4000), H = IDS_ROWS.length, sx = W / l.n_traces;
+  c.width = W; c.height = H;
+  const g = c.getContext("2d");
+  g.fillStyle = "#adb5bd"; g.fillRect(0, 0, W, H);
+  for (const r of l.ids_ballast) IDS_ROWS.forEach(([, , col, max], i) => {
+    const v = r[col]; if (v === 255) return;
+    const t = Math.min(Math.max(v / max, 0), 1);
+    g.fillStyle = max > 10 ? `hsl(210,70%,${92 - 62 * t}%)` : `hsl(${120 - 120 * t},70%,45%)`;
+    g.fillRect(Math.floor(r[0] * sx), i, Math.max(1, Math.ceil((r[1] - r[0] + 1) * sx)), 1);
+  });
+  c.onmousemove = (e) => {
+    const b = c.getBoundingClientRect(), tr = (e.clientX - b.left) / b.width * l.n_traces;
+    const r = l.ids_ballast.find((x) => x[0] <= tr && tr <= x[1]);
+    c.title = r ? `trace ${r[0]}–${r[1]}\n` + IDS_ROWS.map(([k, lab, col]) => `${lab} (${k}): ${r[col] === 255 ? "ไม่มีค่า" : r[col]}`).join("\n") : "";
+  };
 }
 function nice(span, n) {
   const raw = span / n, p = 10 ** Math.floor(Math.log10(raw)), m = raw / p;
@@ -448,6 +478,7 @@ function applyZoom() {
   const l = line(); if (!l) return;
   const { x0, x1, y0, y1 } = S.view, w = x1 - x0, h = y1 - y0;
   $$(".zoomer").forEach((z) => Object.assign(z.style, { left: `${(-x0 / w) * 100}%`, width: `${100 / w}%`, top: `${(-y0 / h) * 100}%`, height: `${100 / h}%` }));
+  $$(".xzoom").forEach((z) => Object.assign(z.style, { left: `${(-x0 / w) * 100}%`, width: `${100 / w}%` }));
   $$('[data-axis="t"]').forEach((a) => (a.innerHTML = yTicks(l, "t")));
   $$('[data-axis="d"]').forEach((a) => (a.innerHTML = yTicks(l, "d")));
   $$('[data-axis="x"]').forEach((a) => (a.innerHTML = xTicks(l)));
@@ -1325,6 +1356,7 @@ $("#folderPath").addEventListener("keydown", (e) => { if (e.key === "Enter") sca
 $("#folderPath").value = store("lastFolder", "");
 $("#secBtn").addEventListener("click", matchSections);
 $("#secKml").value = store("lastKml", "");
+$("#idsCsv").value = store("lastIdsCsv", "");
 $("#toReview").addEventListener("click", async () => { S.job = await api(jobUrl("")); openReview(); });
 $("#resumeBtn").addEventListener("click", resumeJob);
 $("#demoBtn").addEventListener("click", runDemo);
