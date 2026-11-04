@@ -15,6 +15,7 @@
   <div class="brand">GPR Analyzer <span class="sub">วิเคราะห์ข้อมูลเรดาร์ตรวจใต้ดิน</span></div>
   <div class="job-meta" id="jobMeta"></div>
   <div class="exports" id="exports" hidden>
+    <button class="btn primary" id="confirmBtn" title="ตรวจยืนยันทีละจุดทั้งงาน เรียงจากจุดเสี่ยงสูงสุด พร้อมแผนที่">โหมดตรวจยืนยัน</button>
     <button class="btn primary" id="summaryBtn" title="ตรวจข้อมูลสำคัญอีกครั้งก่อนออกรายงาน">สรุปก่อนออกรายงาน</button>
     <span class="exp-label">ส่งออก</span>
     <a class="btn" data-package title="รายงาน PDF + Word, ตารางโซน CSV, แผนที่ KMZ, JSON, labels และ manifest ในไฟล์เดียว">รายงานครบชุด ZIP</a>
@@ -137,6 +138,14 @@
 
 <!-- ======================= review ======================= -->
 <main id="reviewView" class="review" hidden>
+  <aside class="queue" id="queuePanel">
+    <div class="q-head"><h3>จุดที่ต้องตรวจ</h3><button class="btn small" id="confirmExit" title="กลับไปหน้าตรวจผลแบบเดิม">← หน้าเดิม</button></div>
+    <div class="q-progress"><div class="bar"><span id="qBar"></span></div><span class="small" id="qProgress"></span></div>
+    <div class="q-targets" id="qTargets"></div>
+    <label class="small">แสดง <select id="qShow"><option value="todo">รอตรวจ</option><option value="all">ทั้งหมด</option><option value="done">ตัดสินแล้ว</option></select></label>
+    <ol class="q-list" id="qList"></ol>
+    <p class="small muted">เรียงจากระดับการดำเนินการ (E, 1, 2, 3) และความเชื่อมั่น แล้วตามด้วยช่วงที่โปรแกรมว่าปกติซึ่งสุ่มมาให้ตรวจ 10% (ไม่เกิน 5 ช่วงต่อเส้น)</p>
+  </aside>
   <aside class="lines">
     <h3>เส้นสำรวจ</h3>
     <ul id="lineList"></ul>
@@ -149,6 +158,17 @@
 
   <section class="maincol">
     <div class="run-banner" id="runBanner" hidden></div>
+    <div class="confirm-head" id="confirmHead">
+      <div><h2 id="cTitle"></h2><div class="small muted" id="cFacts"></div></div>
+      <div class="tools">
+        <label class="small" title="เลือกภาพที่เหมาะกับเป้าหมาย อัตโนมัติ = ตามชนิดของจุด">ฟิลเตอร์แสดงผล <select id="cView"></select></label>
+        <label class="small">ความเข้ม <input type="range" id="cContrast" min="0.5" max="3" step="0.1" value="1"></label>
+        <label class="small">ความสว่าง <input type="range" id="cBright" min="0.5" max="2" step="0.05" value="1"></label>
+        <button class="btn small" id="cWider" title="ดูบริเวณรอบ ๆ กว้างขึ้น">⤢ กว้างขึ้น</button>
+        <button class="btn small" id="cRefocus" title="กลับไปที่จุดนี้">◎ กลับไปที่จุด</button>
+        <button class="btn small" id="cMapAll" title="ซูมแผนที่ให้เห็นทุกจุดในคิว">ดูทุกจุดบนแผนที่</button>
+      </div>
+    </div>
     <div class="line-head">
       <div>
         <h2 id="lineTitle"></h2>
@@ -388,6 +408,23 @@
       </div>
     </details>
   </section>
+
+  <aside class="decide" id="decidePanel">
+    <h3>ผลวิเคราะห์ <span class="muted small" id="dWhere"></span></h3>
+    <div id="dHead"></div>
+    <div class="d-btns">
+      <button class="btn dbtn ok" data-decide="confirm">ยืนยันผิดปกติ <kbd>1</kbd></button>
+      <button class="btn dbtn" data-decide="normal">ไม่ผิดปกติ <kbd>2</kbd></button>
+      <button class="btn dbtn" data-decide="redraw" title="ลากกรอบใหม่บนภาพ แล้วบันทึกเป็นผิดปกติ">แก้ไขกรอบ / วาดโซน <kbd>3</kbd></button>
+      <button class="btn dbtn bad" data-decide="unusable">ภาพใช้ไม่ได้ <kbd>4</kbd></button>
+    </div>
+    <label class="small">หมายเหตุ (ถ้ามี)<textarea id="dNote" rows="3" placeholder="เช่น คล้ายโพรงใต้หินโรยทาง ควรดูร่วมกับเส้นข้างเคียง"></textarea></label>
+    <button class="btn primary big d-save" id="dSave">บันทึกและไปจุดถัดไป →</button>
+    <div class="d-nav"><button class="btn small" id="dPrev">← จุดก่อนหน้า</button><button class="btn small" id="dNext">ข้ามไปจุดถัดไป →</button></div>
+    <div id="dBody"></div>
+    <p class="small muted">ปุ่มลัด: 1–4 เลือกผล · Enter บันทึกแล้วไปต่อ · ← → เปลี่ยนจุด · Esc ยกเลิกการวาด<br>
+      ทุกการตัดสินบันทึกลง labels.jsonl พร้อมผู้ตรวจ เวลา และผลอัตโนมัติ เพื่อใช้ปรับเกณฑ์และฝึกระบบอัตโนมัติภายหลัง</p>
+  </aside>
 
   <aside class="zones">
     <div class="zones-head">

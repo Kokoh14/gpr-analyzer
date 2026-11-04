@@ -363,7 +363,7 @@ function renderLine() {
   const views = VIEWS.filter(([v]) => (l.views || ["grey", "high_gain", "envelope"]).includes(v));
   $("#viewToggles").innerHTML = views.map(([v, title]) => `<label class="toggle small" title="${esc(title)}">
     <input type="checkbox" data-viewtoggle="${v}" ${S.hidden.has(v) ? "" : "checked"}> ${esc(title.split(" (")[0])}</label>`).join("");
-  $("#panes").innerHTML = views.filter(([v]) => !S.hidden.has(v)).map(([v, title, note]) => `
+  $("#panes").innerHTML = views.filter(([v]) => (C.on ? v === C.viewFor(l) : !S.hidden.has(v))).map(([v, title, note]) => `
     <div class="pane" data-view="${v}">
       <div class="pane-cap"><b>${title}</b><span class="muted">${note}
         ${v === "envelope" ? `<span class="legend">-30 dB <span class="bar" style="background:linear-gradient(90deg,#30123b,#4686fb,#1ae4b6,#a2fc3c,#faba39,#e4460a,#7a0403)"></span> 0 dB</span>` : ""}</span></div>
@@ -508,6 +508,7 @@ function overlay(l) {
   }
   for (const s of l.sections) h += `<div class="sbox" title="ไม่ใช้ผล ${esc(s.section_id)}: ${esc(s.reason)}"
       style="left:${(s.trace_start / N) * 100}%;width:${((s.trace_end - s.trace_start + 1) / N) * 100}%"><span class="lbl">ไม่ใช้ ${esc(s.section_id)}</span></div>`;
+  h += C.box(l);
   const c = S.job.comparison?.lines[l.line_id];
   if (c && $("#showRef").checked) for (const r of c.rows) {
     if (r.kind === "ours_only") continue;
@@ -709,6 +710,7 @@ const M = {
       ly.slice.clearLayers(); ly.zones.clearLayers(); this.drawSlice();
       const pts = this.overview.filter((o) => o.has_gps).flatMap((o) => o.points);
       if (fit && pts.length) this.map.fitBounds(pts, { padding: [20, 20] });
+      C.drawMap();
       return;
     }
     const [s, e] = d.ends;
@@ -718,6 +720,7 @@ const M = {
       : `(GPS ${d.gps_fixes} จุด · ยาวตาม GPS ${fmt(d.length_gps_m, 1)} m${d.length_wheel_m ? ` · ตามล้อวัดระยะ ${fmt(d.length_wheel_m, 1)} m` : ""})`;
     this.drawSlice(); this.drawZones();
     if (fit) this.fit();
+    C.drawMap();
   },
   // Markers as Google Earth shows ViewPoint's KML: field marks from the .mrk files (filled, colour standard of
   // the mark) and the markers of an imported answer-key KML ("เฉลย", rings). Click for the same balloon text.
@@ -868,6 +871,218 @@ const M = {
     $("#panes").scrollIntoView({ block: "nearest", behavior: "smooth" });
   },
 };
+// ------------------------------------------------------------------ confirm mode (queue of the whole job, triage.py)
+// One large radargram per item, decision buttons 1–4, Enter = save and go on, map of every item to jump to.
+const TARGET = {
+  all: ["ทั้งหมด", "--line"], void: ["โพรง / ช่องอากาศ", "--t-void"], moisture: ["ความชื้นสูง", "--t-moist"],
+  pipe: ["ท่อ / วัตถุ", "--t-pipe"], loose: ["ดินหลวม / ถูกรบกวน", "--t-scatter"], layer: ["ชั้นดิน", "--t-layer"],
+  other: ["อื่น ๆ", "--t-unknown"], audit: ["สุ่มตรวจช่วงปกติ", "--t-audit"],
+};
+const QSTATUS = { todo: "รอตรวจ", confirm: "ยืนยันผิดปกติ", normal: "ไม่ผิดปกติ", unusable: "ภาพใช้ไม่ได้" };
+// display filter per target: the view that shows that kind of target best (display only, scoring is unchanged)
+const TVIEW = { void: "high_gain", moisture: "envelope", pipe: "high_gain", loose: "autodisplay", layer: "grey", other: "grey", audit: "autodisplay" };
+const C = {
+  on: false, items: [], cur: null, target: "all", pick: null, drawing: false, view: "auto", fitted: false,
+  async enter() {
+    if (!S.job?.lines.length) { toast("ยังไม่มีเส้นที่ประมวลผลเสร็จ"); return; }
+    this.on = true; this.fitted = false;
+    $("#summaryView").hidden = true; $("#reviewView").hidden = false;
+    $("#reviewView").classList.add("confirm");
+    await this.load();
+    const first = this.list().find((it) => it.status === "todo") || this.list()[0];
+    if (first) await this.go(first); else { render(); this.render(); }
+  },
+  exit() {
+    this.on = false; this.cur = null; stopDraw(); this.drawing = false;
+    $("#reviewView").classList.remove("confirm");
+    M.layers.queue?.clearLayers();
+    render(); setTimeout(() => M.map?.invalidateSize(), 50);
+  },
+  async load() {
+    try { const q = await api(jobUrl("/queue.json")); this.items = q.items; this.counts = q.counts; }
+    catch (e) { toast("โหลดคิวไม่ได้: " + e.message); }
+  },
+  key: (it) => `${it.line_id}/${it.id}`,
+  list() {
+    const show = $("#qShow").value;
+    return this.items.filter((it) => (this.target === "all" || it.target === this.target)
+      && (show === "all" || (show === "todo" ? it.status === "todo" : it.status !== "todo")));
+  },
+  current() { return this.cur && this.items.find((it) => this.key(it) === this.cur); },
+  viewFor(l) {
+    const it = this.current(), v = this.view === "auto" ? (it ? TVIEW[it.target] : "grey") : this.view;
+    return (l.views || []).includes(v) ? v : "grey";
+  },
+  render() {
+    if (!this.on) return;
+    const done = this.items.filter((it) => it.status !== "todo").length, n = this.items.length;
+    $("#qProgress").textContent = `ตัดสินแล้ว ${done} / ${n}`;
+    $("#qBar").style.width = n ? `${(done / n) * 100}%` : "0";
+    const cnt = (t) => t === "all" ? [this.items.filter((it) => it.status === "todo").length, n] : [this.counts?.[t]?.todo || 0, this.counts?.[t]?.total || 0];
+    $("#qTargets").innerHTML = Object.entries(TARGET).filter(([t]) => t === "all" || cnt(t)[1])
+      .map(([t, [name, c]]) => `<button data-qtarget="${t}" class="${this.target === t ? "on" : ""}" style="--c:var(${c})">${name} <b>${cnt(t)[0]}</b>/${cnt(t)[1]}</button>`).join("");
+    const list = this.list();
+    $("#qList").innerHTML = list.slice(0, 400).map((it) => {
+      const [name, c] = TARGET[it.target] || TARGET.other;
+      const dist = it.distance_start_m != null ? `${fmt(it.distance_start_m, 1)}–${fmt(it.distance_end_m, 1)} m` : `trace ${it.trace_start}–${it.trace_end}`;
+      return `<li data-qitem="${esc(this.key(it))}" class="${this.key(it) === this.cur ? "cur" : ""} ${it.status !== "todo" ? "done" : ""}" style="--c:var(${c})">
+        <div class="t"><b>${esc(it.line_id)} · ${esc(it.id)}</b><span class="qst ${it.status}">${QSTATUS[it.status]}</span></div>
+        <div class="small">${name} · ${dist}</div>
+        <div class="small muted">ลึก ${fmt(it.depth_top_m)}–${fmt(it.depth_bottom_m)} m · เชื่อมั่น${CONF[it.confidence] || it.confidence}${it.action !== "none" ? " · " + (ACT[it.action] || it.action) : ""}</div></li>`;
+    }).join("") + (list.length > 400 ? `<li class="muted small">… อีก ${list.length - 400} จุด (เลือกตัวกรองให้แคบลง)</li>` : "")
+      || `<li class="muted">ไม่มีจุดในตัวกรองนี้</li>`;
+    $(`[data-qitem="${CSS.escape(this.cur || "")}"]`)?.scrollIntoView({ block: "nearest" });
+    const views = VIEWS.filter(([v]) => S.job.lines.some((l) => (l.views || []).includes(v)));
+    $("#cView").innerHTML = `<option value="auto">อัตโนมัติตามเป้าหมาย</option>` + views.map(([v, t]) => `<option value="${v}">${esc(t.split(" (")[0])}</option>`).join("");
+    $("#cView").value = this.view;
+    this.renderDecide();
+    this.drawMap();
+  },
+  renderDecide() {
+    const it = this.current();
+    $$("[data-decide]").forEach((b) => b.classList.toggle("pick", b.dataset.decide === this.pick));
+    if (!it) { $("#dHead").innerHTML = ""; $("#dBody").innerHTML = `<p class="muted">ตรวจครบทุกจุดในตัวกรองนี้แล้ว</p>`; $("#dWhere").textContent = ""; $("#cTitle").textContent = "ไม่มีจุดรอตรวจ"; $("#cFacts").textContent = ""; return; }
+    const [name, c] = TARGET[it.target] || TARGET.other;
+    const z = it.kind === "zone" ? S.job.lines.find((l) => l.line_id === it.line_id)?.zones.find((x) => x.zone_id === it.id) : null;
+    const ev = z ? z.evidence.map((e) => `<li class="${e.kind}">${esc(e.text || e.params?.text_en || e.code)}</li>`).join("")
+      : it.evidence.map((e) => `<li>${esc(e)}</li>`).join("");
+    const kind = { zone: it.manual ? "โซนที่ผู้ตรวจวาด" : "โซนจากการตรวจจับอัตโนมัติ", screen: "จากการคัดกรองตามเป้าหมาย", audit: "สุ่มตรวจช่วงที่โปรแกรมว่าปกติ" }[it.kind];
+    $("#dWhere").textContent = `${it.line_id} · ${it.id}`;
+    $("#cTitle").textContent = `${it.line_id} · ${it.id} · ${name}`;
+    $("#cFacts").textContent = `${it.distance_start_m != null ? `ระยะ ${fmt(it.distance_start_m, 1)}–${fmt(it.distance_end_m, 1)} m · ` : ""}trace ${it.trace_start}–${it.trace_end} · ลึก ${fmt(it.depth_top_m)}–${fmt(it.depth_bottom_m)} m`
+      + (it.lat != null ? ` · ${it.lat.toFixed(6)}, ${it.lon.toFixed(6)}` : " · ไม่มีพิกัด GPS");
+    $("#dHead").innerHTML = `<div class="d-type" style="--c:var(${c})">${name}</div>
+      <div class="small muted">${kind}</div>`;
+    $("#dBody").innerHTML = `<dl><dt>สถานะ</dt><dd><span class="qst ${it.status}">${QSTATUS[it.status]}</span></dd>
+        <dt>ความเชื่อมั่น</dt><dd>${CONF[it.confidence] || it.confidence} <span class="small muted">(จากกฎ ไม่ใช่ความน่าจะเป็น)</span></dd>
+        ${it.action !== "none" ? `<dt>แนะนำ</dt><dd>${ACT[it.action] || it.action}</dd>` : ""}
+        <dt>ระยะ</dt><dd>${it.distance_start_m != null ? `${fmt(it.distance_start_m, 1)}–${fmt(it.distance_end_m, 1)} m` : "–"}</dd>
+        <dt>ความลึก</dt><dd>${fmt(it.depth_top_m)}–${fmt(it.depth_bottom_m)} m</dd>
+        ${it.drop_db != null ? `<dt>ลดทอน</dt><dd>${it.drop_db} dB ต่ำกว่าค่ากลางของเส้น</dd>` : ""}</dl>
+      <ul class="ev">${ev}</ul>`;
+    if (document.activeElement !== $("#dNote")) $("#dNote").value = it.note && !it.note.startsWith("ภาพใช้ไม่ได้") ? it.note : "";
+  },
+  // dashed box for a screen / audit item (zones have their own boxes)
+  box(l) {
+    const it = this.on && this.current();
+    if (!it || it.kind === "zone" || it.line_id !== l.line_id) return "";
+    const T = l.time_window_ns, N = l.n_traces, c = (TARGET[it.target] || TARGET.other)[1];
+    return `<div class="qbox" style="--c:var(${c});left:${(it.trace_start / N) * 100}%;width:${((it.trace_end - it.trace_start + 1) / N) * 100}%;
+      top:${(it.time_top_ns / T) * 100}%;height:${Math.max(((it.time_bottom_ns - it.time_top_ns) / T) * 100, 0.8)}%"><span class="lbl">${esc(it.id)}</span></div>`;
+  },
+  async go(it, widen = 1) {
+    if (!it) return;
+    this.cur = this.key(it); this.pick = null; this.drawing = false; stopDraw();
+    if (it.line_id !== S.line) {
+      S.line = it.line_id; S.editing = null; S.cursor = null; S.view = fullView(line());
+      S.sel = it.kind === "zone" ? it.id : null;
+      render(); await M.load();
+    } else { S.sel = it.kind === "zone" ? it.id : null; render(); }
+    this.focus(it, widen);
+    this.render();
+    if (it.lat != null && M.map) M.map.setView([it.lat, it.lon], Math.max(M.map.getZoom(), 17));
+  },
+  focus(it, widen = 1) {
+    const l = line(); if (!l) return;
+    const N = l.n_traces, T = l.time_window_ns, w = it.trace_end - it.trace_start + 1;
+    const pad = Math.max(w * 1.5, l.dx_m ? 8 / l.dx_m : 60) * widen;
+    const bottom = Math.max(it.time_bottom_ns * 1.5, timeAtDepth(l, 1.5));
+    setView((it.trace_start - pad) / N, (it.trace_end + 1 + pad) / N, 0, Math.min(1, (widen > 1 ? 2 : 1) * bottom / T));
+    S.cursor = null;
+  },
+  step(d) {
+    const list = this.list(), i = list.findIndex((it) => this.key(it) === this.cur);
+    const it = list[i < 0 ? 0 : Math.min(Math.max(i + d, 0), list.length - 1)];
+    if (it) this.go(it);
+  },
+  nextTodo(fromKey) {  // the next item still to check after fromKey in the full order, wrapping round
+    const all = this.items.filter((it) => this.target === "all" || it.target === this.target);
+    const i = all.findIndex((it) => this.key(it) === fromKey);
+    return [...all.slice(i + 1), ...all.slice(0, Math.max(i, 0))].find((it) => it.status === "todo");
+  },
+  choose(code) {
+    const it = this.current(); if (!it) return;
+    if (code === "redraw") {
+      this.drawing = true; this.pick = "redraw"; S.drawFor = "__confirm__"; document.body.classList.add("drawing");
+      toast(it.kind === "zone" ? `ลากกรอบใหม่ของ ${it.id} บนภาพ (Esc ยกเลิก)` : "ลากกรอบบนภาพเพื่อวาดโซนที่พบ (Esc ยกเลิก)");
+    } else this.pick = code;
+    this.renderDecide();
+  },
+  async save() {
+    const it = this.current(); if (!it) return;
+    if (!this.pick || this.pick === "redraw") { toast(this.pick === "redraw" ? "ลากกรอบบนภาพก่อน" : "เลือกผลก่อน (1–4)"); return; }
+    await this.decide(it, this.pick, $("#dNote").value.trim());
+  },
+  async decide(it, code, note) {
+    const k = this.key(it);
+    try {
+      if (it.kind === "zone") {
+        const url = `/api/jobs/${S.job.job_id}/lines/${it.line_id}/zones/${it.id}/review`;
+        const body = code === "confirm" ? { action: "accept" } : { action: "reject" };
+        if (code === "unusable") body.note = "ภาพใช้ไม่ได้" + (note ? " · " + note : "");
+        else if (code === "normal") body.note = note || "ไม่ผิดปกติ (โหมดตรวจยืนยัน)";
+        else if (note) body.note = note;
+        S.job = await post(url, body);
+        await this.load();
+      } else {
+        const q = await post(`/api/jobs/${S.job.job_id}/lines/${it.line_id}/screen/${it.id}`, { decision: code, note, item: it });
+        this.items = q.items; this.counts = q.counts;
+      }
+      $("#dNote").value = "";
+      toast(`${it.line_id} · ${it.id}: ${QSTATUS[code]}`);
+      renderTop();
+      const nx = this.nextTodo(k);
+      if (nx) await this.go(nx); else { this.cur = k; render(); this.render(); toast("ตรวจครบทุกจุดในตัวกรองนี้แล้ว"); }
+    } catch (e) { toast("บันทึกไม่ได้: " + e.message); }
+  },
+  async drawn(vals) {  // box drawn after "3": new box for a zone (= confirmed, edited), or a new zone for the others
+    const it = this.current(); if (!it) return;
+    const note = $("#dNote").value.trim();
+    try {
+      if (it.kind === "zone") {
+        S.job = await post(`/api/jobs/${S.job.job_id}/lines/${it.line_id}/zones/${it.id}/review`, { action: "edit", changes: vals, ...(note ? { note } : {}) });
+        await this.load();
+      } else {
+        const label = it.target === "moisture" ? "ความชื้นสูง (จากคิวตรวจยืนยัน)" : "พบจากการสุ่มตรวจช่วงปกติ";
+        S.job = await post(`/api/jobs/${S.job.job_id}/lines/${it.line_id}/zones`, { ...vals, note: note ? `${label} · ${note}` : label });
+        const q = await post(`/api/jobs/${S.job.job_id}/lines/${it.line_id}/screen/${it.id}`, { decision: "confirm", note, item: it });
+        this.items = q.items; this.counts = q.counts;
+      }
+      toast("บันทึกกรอบแล้ว"); renderTop();
+      const nx = this.nextTodo(this.key(it));
+      if (nx) await this.go(nx); else { render(); this.render(); }
+    } catch (e) { toast("บันทึกไม่ได้: " + e.message); }
+  },
+  onKey(e) {  // keyboard in confirm mode (inputs are skipped by the caller)
+    const k = e.key;
+    if (k >= "1" && k <= "4") { e.preventDefault(); this.choose(["confirm", "normal", "redraw", "unusable"][+k - 1]); }
+    else if (k === "Enter") { e.preventDefault(); this.save(); }
+    else if (k === "ArrowRight") { e.preventDefault(); this.step(1); }
+    else if (k === "ArrowLeft") { e.preventDefault(); this.step(-1); }
+  },
+  drawMap() {
+    if (!this.on || !M.map) return;
+    if (!M.layers.queue) M.layers.queue = L.layerGroup().addTo(M.map);
+    const ly = M.layers.queue; ly.clearLayers();
+    const css = getComputedStyle(document.documentElement), pts = [];
+    let curPt = null;
+    for (const it of this.items) {
+      if (it.lat == null || !(this.target === "all" || it.target === this.target)) continue;
+      const col = css.getPropertyValue((TARGET[it.target] || TARGET.other)[1]).trim() || "#868e96";
+      const cur = this.key(it) === this.cur, todo = it.status === "todo";
+      if (cur) curPt = it;
+      pts.push([it.lat, it.lon]);
+      L.circleMarker([it.lat, it.lon], { radius: todo ? 7 : 5, color: "#fff", weight: 2, fillColor: col, fillOpacity: todo ? 1 : 0.35 })
+        .addTo(ly).on("click", () => this.go(it))
+        .bindTooltip(`<b>${esc(it.line_id)} · ${esc(it.id)}</b> ${esc((TARGET[it.target] || TARGET.other)[0])}<br>${QSTATUS[it.status]} · ลึก ${fmt(it.depth_top_m)}–${fmt(it.depth_bottom_m)} m<br>(คลิกเพื่อไปตรวจ)`);
+    }
+    if (curPt) L.circleMarker([curPt.lat, curPt.lon], { radius: 13, color: "#e8590c", weight: 4, fill: false, interactive: false }).addTo(ly);
+    this.pts = pts;
+    if (!this.fitted && pts.length) { this.fitted = true; this.fitAll(); }
+  },
+  fitAll() { if (this.pts?.length && M.map) M.map.fitBounds(this.pts, { padding: [25, 25], maxZoom: 19 }); },
+};
+
 async function switchLine(id) {
   S.line = id; S.sel = null; S.editing = null; S.cursor = null; S.view = fullView(line());
   render(); M.load();
@@ -1143,6 +1358,7 @@ document.addEventListener("mouseup", async () => {
   if (!b || Math.abs(b.trace - a.trace) < 2) { toast("กรอบเล็กเกินไป"); return; }
   const vals = { trace_start: Math.min(a.trace, b.trace), trace_end: Math.max(a.trace, b.trace),
     time_top_ns: +Math.min(a.t, b.t).toFixed(2), time_bottom_ns: +Math.max(a.t, b.t).toFixed(2) };
+  if (C.drawing) { C.drawing = false; await C.drawn(vals); return; }
   if (target === REF_DRAW) {
     await update(post(lineUrl("/ref/picks"), { source: $("#refSource").value, x_unit: "trace", y_unit: "ns",
       x_start: vals.trace_start, x_end: vals.trace_end, top: vals.time_top_ns, bottom: vals.time_bottom_ns }), "เพิ่มจุดอ้างอิงแล้ว");
@@ -1244,8 +1460,9 @@ document.addEventListener("submit", (e) => {
   }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { stopDraw(); S.drag = null; }
+  if (e.key === "Escape") { stopDraw(); S.drag = null; C.drawing = false; }
   if ($("#reviewView").hidden || e.target.closest("input,textarea,select")) return;
+  if (C.on) { C.onKey(e); return; }
   const l = line(); if (!l || !l.zones.length) return;
   const ids = l.zones.map((z) => z.zone_id), i = ids.indexOf(S.sel);
   const k = e.key.toLowerCase();
@@ -1373,3 +1590,30 @@ $("#autoBtn").addEventListener("click", () => reprocess({}));
 })();
 
 $("#scanMetric").addEventListener("change", drawScanMap);
+
+// confirm mode
+$("#confirmBtn").addEventListener("click", () => C.enter());
+$("#confirmExit").addEventListener("click", () => C.exit());
+$("#qShow").addEventListener("change", () => C.render());
+$("#qTargets").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-qtarget]"); if (!b) return;
+  C.target = b.dataset.qtarget; C.fitted = false; C.render();
+  const it = C.list().find((x) => x.status === "todo") || C.list()[0];
+  if (it && (!C.current() || !C.list().includes(C.current()))) C.go(it);
+});
+$("#qList").addEventListener("click", (e) => {
+  const li = e.target.closest("[data-qitem]"); if (!li) return;
+  C.go(C.items.find((it) => C.key(it) === li.dataset.qitem));
+});
+$("#cView").addEventListener("change", (e) => { C.view = e.target.value; const v = { ...S.view }; renderLine(); setView(v.x0, v.x1, v.y0, v.y1); });
+const cFilter = () => { const r = $("#reviewView").style; r.setProperty("--cc", $("#cContrast").value); r.setProperty("--cb", $("#cBright").value); };
+$("#cContrast").addEventListener("input", cFilter);
+$("#cBright").addEventListener("input", cFilter);
+$("#cWider").addEventListener("click", () => { const it = C.current(); if (it) C.focus(it, 4); });
+$("#cRefocus").addEventListener("click", () => { const it = C.current(); if (it) C.focus(it); });
+$("#cMapAll").addEventListener("click", () => C.fitAll());
+$$("[data-decide]").forEach((b) => b.addEventListener("click", () => C.choose(b.dataset.decide)));
+$("#dSave").addEventListener("click", () => C.save());
+$("#dPrev").addEventListener("click", () => C.step(-1));
+$("#dNext").addEventListener("click", () => C.step(1));
+$("#dNote").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); C.save(); } });
