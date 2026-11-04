@@ -37,7 +37,8 @@ from gpr_analyzer.core import Radargram, crop_to_range
 from gpr_analyzer.detect import analyze_line, to_report_records
 from gpr_analyzer.detect import crossline
 from gpr_analyzer.io import read as read_file
-from gpr_analyzer.io.ids import is_ids_dt
+from gpr_analyzer.io import ids_ballast
+from gpr_analyzer.io.ids import is_ids_dt, read_ids_header, zone_parts
 from gpr_analyzer.processing import ProcessingOptions, ProcessingResult, run_pipeline
 from gpr_analyzer.report import write_report
 from gpr_analyzer.report.compose import Signoff
@@ -235,6 +236,7 @@ class LineState:
             "n_traces": a.n_traces, "n_samples": a.n_samples, "dt_ns": a.dt_ns, "dx_m": a.dx_m,
             "time_window_ns": a.n_samples * a.dt_ns, "views": self.views(),
             "trace_offset": self.trace_offset, "crop": self.raw.metadata.get("crop"),
+            "ids_ballast": self.raw.metadata.get("ids_ballast"),
             "km_from": self.km(0), "km_to": self.km(a.n_traces - 1),
             "has_gps": self.positions() is not None,
             "velocity_m_per_ns": res.velocity_m_per_ns, "velocity_source": res.velocity_source,
@@ -361,12 +363,14 @@ class Job:
     created: str = field(default_factory=_now)
     comparison: dict[str, Any] = field(default_factory=cmp.new_state)  # see compare.py
     source_folder: str = ""  # survey read in place from this folder ("" = files uploaded into uploads/)
+    ids_ballast_dir: str = ""  # folder of IDS automatic ballast CSVs shown under IDS lines ("" = none)
     plan: list[dict[str, Any]] = field(default_factory=list)
     progress: dict[str, Any] = field(default_factory=lambda: {"state": "done"})
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _thread: threading.Thread | None = field(default=None, repr=False)
     _log_tail: list[str] = field(default_factory=list, repr=False)
     _pending_lines: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+    _ballast_idx: dict[Path, dict[tuple[int, int], Path]] | None = field(default=None, repr=False)
     _hash_cache: dict[tuple, str] = field(default_factory=dict, repr=False)  # input file SHA-256 by (path, size, mtime)
 
     @property
@@ -496,6 +500,8 @@ class Job:
         for ch, rg in enumerate(rgs):
             line_id = f"L{e['index'] + 1}" if len(rgs) == 1 else f"L{e['index'] + 1}-ch{ch + 1}"
             offset = rg.metadata.get("crop", {}).get("trace_start", 0)
+            if e["family"] == "ids" and self.ids_ballast_dir:
+                self._attach_ids_ballast(primary, rg, offset)
             if e.get("chainage"):
                 rg.metadata.update(chainage=e["chainage"], sections=", ".join(e.get("sections", [])))
             ln = LineState(line_id=line_id, source_file=primary.name, channel=ch + 1 if len(rgs) > 1 else None,
@@ -523,6 +529,24 @@ class Job:
         with self.lock:
             e.update(state="done", step="", line_ids=ids)
             self.save()
+
+    def _attach_ids_ballast(self, primary: Path, rg: Radargram, offset: int) -> None:
+        """The IDS automatic ballast classes of this channel, per trace range of this line."""
+        try:
+            if self._ballast_idx is None:
+                self._ballast_idx = ids_ballast.index(self.ids_ballast_dir)
+            ch = int(rg.metadata.get("channel") or 1)
+            parts = zone_parts(primary.parent).get(ch) or []
+            counts = [read_ids_header(p)["n_traces"] for p in parts]
+            rows, folder = ids_ballast.zone_rows(self._ballast_idx, ch, counts, rg.dx_m or 0.0)
+        except Exception as ex:  # noqa: BLE001 - the reference is optional; say why it is missing
+            self.log(f"{primary.parent.name} ช่อง {rg.metadata.get('channel')}: อ่าน Ballast CSV ของ IDS ไม่ได้ ({ex})")
+            return
+        if folder is None:
+            self.log(f"{primary.parent.name} ช่อง {ch}: ไม่พบ Ballast CSV ของ IDS ที่ตรงกับเส้นนี้")
+            return
+        rg.metadata["ids_ballast"] = ids_ballast.crop_rows(rows, offset, offset + rg.n_traces - 1)
+        rg.metadata["ids_ballast_folder"] = str(folder)
 
     def _entry_failed(self, e: dict[str, Any], msg: str) -> None:
         with self.lock:
@@ -864,6 +888,7 @@ class Job:
         state = {
             "version": 2, "job_id": self.job_id, "created": self.created, "saved": _now(), "info": asdict(self.info),
             "lang": self.lang, "reviewer": self.reviewer, "source_folder": self.source_folder,
+            "ids_ballast_dir": self.ids_ballast_dir,
             "plan": self.plan, "progress": self.progress, "problems": self.problems, "unassigned": self.unassigned,
             "lines": [{"line_id": ln.line_id, "source_file": ln.source_file, "options": options_dict(ln.options),
                        "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones, "sections": ln.sections,
@@ -896,6 +921,7 @@ class Job:
         job.lang, job.reviewer = st.get("lang", "bi"), st.get("reviewer", "")
         job.comparison = cmp.upgrade_state(st.get("comparison") or cmp.new_state())
         job.source_folder = st.get("source_folder", "")
+        job.ids_ballast_dir = st.get("ids_ballast_dir", "")
         if "plan" not in st:  # version 1: no plan or checkpoints yet
             job.load(sorted(p for p in job.upload_dir.iterdir() if p.is_file()))
         else:
