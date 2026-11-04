@@ -153,8 +153,8 @@ def _gps(ch1_parts: list[Path]) -> list[dict]:
     return rows
 
 
-def read_ids(path: str | Path) -> list[Radargram]:
-    """Every saved channel of the zone that holds `path` (any LIccpppp.dt), parts joined."""
+def read_ids(path: str | Path, channels: set[int] | None = None) -> list[Radargram]:
+    """Every saved channel (or only `channels`) of the zone that holds `path` (any LIccpppp.dt), parts joined."""
     path = Path(path)
     parts = zone_parts(path.parent)
     if not parts:
@@ -162,6 +162,8 @@ def read_ids(path: str | Path) -> list[Radargram]:
     gps = _gps(parts[min(parts)])
     out = []
     for ch, files in parts.items():
+        if channels is not None and ch not in channels:
+            continue
         hdr, blocks = None, []
         for p in files:
             h, traces = _header(_records(p), p)

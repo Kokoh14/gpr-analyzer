@@ -12,7 +12,7 @@ const TYPE = {
 const CONF = { high: "สูง", medium: "ปานกลาง", low: "ต่ำ", confirmed: "ยืนยันแล้ว" };
 const ACT = { E: "E ฉุกเฉิน", 1: "1 เร่งด่วน", 2: "2 ตรวจสอบเพิ่ม", 3: "3 เฝ้าระวัง", none: "ไม่ต้องดำเนินการ" };
 const REV = { auto: "ยังไม่ตรวจ", accepted: "ยอมรับแล้ว", edited: "แก้ไขแล้ว", rejected: "ปฏิเสธ" };
-const ART = { vertical_stripe: "แถบแนวตั้ง", bottom_noise: "noise ก้นภาพ", ringing: "ringing แนวนอน", abnormal_trace: "trace ผิดปกติ", dead_trace: "trace ว่าง", stationary: "หยุดเดิน" };
+const ART = { surface_change: "ผิวเปลี่ยน (จุดตัด/สะพาน)", vertical_stripe: "แถบแนวตั้ง", bottom_noise: "noise ก้นภาพ", ringing: "ringing แนวนอน", abnormal_trace: "trace ผิดปกติ", dead_trace: "trace ว่าง", stationary: "หยุดเดิน" };
 const STEP = { center_frequency: "ความถี่กลาง", dewow: "Dewow", time_zero: "Time-zero", bandpass: "Bandpass", background_removal: "Background removal",
   gain: "Gain (SEC)", velocity: "ความเร็วคลื่น", migration: "Migration", envelope: "Envelope / energy", agc_display: "AGC (แสดงผล)",
   display_qc: "ตรวจ trace (แสดงผล)", display_bandpass: "Bandpass อัตโนมัติ (แสดงผล)", display_background: "ลบพื้นหลังอัตโนมัติ (แสดงผล)",
@@ -22,6 +22,7 @@ const VIEWS = [
   ["high_gain", "Gain สูง (AGC ใช้ดูเท่านั้น)", "สี = ขั้วสัญญาณ แอมพลิจูดเทียบกันข้ามภาพไม่ได้"],
   ["envelope", "พลังงานสะท้อน (Hilbert envelope)", "สีแดง = สะท้อนแรง ไม่ได้แปลว่าเป็นโพรง"],
   ["viewpoint", "แบบหน้าจอ ViewPoint (ImpulseRadar)", "เลียนแบบภาพของ ViewPoint ใช้เทียบกับโปรแกรมของเครื่อง ใช้ดูเท่านั้น"],
+  ["layers", "ชั้นแนวราบ (ไม่ลบพื้นหลัง)", "เห็นชั้นที่ราบยาว เช่น ใต้หินโรยทาง ซึ่งการลบพื้นหลังจะลบออก แถบดำขาวด้านบนคือคลื่นตรงจากสายอากาศ"],
   ["autodisplay", "ฟิลเตอร์อัตโนมัติ (ใช้ดูเท่านั้น)", "โปรแกรมเลือก bandpass, ลบพื้นหลัง, gain และ contrast จากข้อมูลเส้นนี้เอง ดูค่าที่เลือกในตารางขั้นตอนประมวลผล gain เท่ากันทุก trace จึงเทียบความแรงตามแนวยาวได้"],
 ];
 const FAMILY = { iprh: "header", iprb: "data", rad: "header", rd3: "data", rd7: "data", hd: "header", dt1: "data", dzt: "data", sgy: "data", segy: "data", dt: "data" };
@@ -132,6 +133,7 @@ async function scanFolder() {
   try {
     S.scan = await post("/api/scan", { path, recursive: $("#recursive").checked });
     for (const ln of S.scan.lines) ln.include = ln.status !== "error";
+    S.secs = null; $("#secResult").innerHTML = "";
     keep("lastFolder", path);
     $("#browser").hidden = true;
     renderScan();
@@ -166,9 +168,36 @@ function renderScan() {
   drawScanMap();
 }
 function updateRunBtn() {
-  const n = selectedLines().length;
+  const n = selectedLines().length, ns = chosenSections().length;
   $("#runBtn").disabled = !(n || S.files.length);
-  $("#runBtn").textContent = n ? `เริ่มประมวลผล ${n} เส้นจากโฟลเดอร์` : "เริ่มวิเคราะห์";
+  $("#runBtn").textContent = ns ? `เริ่มประมวลผลเฉพาะ ${ns} ช่วง กม. ที่เลือก` : n ? `เริ่มประมวลผล ${n} เส้นจากโฟลเดอร์` : "เริ่มวิเคราะห์";
+}
+// sections of a project KML (risk points): only their windows are processed, results shown in railway km
+const chosenSections = () => (S.secs?.sections || []).filter((s) => s.include);
+const kmText = (k) => k == null ? "–" : `${Math.floor(k)}+${String(Math.round((k % 1) * 1000)).padStart(3, "0")}`;
+async function matchSections() {
+  const kml = $("#secKml").value.trim();
+  if (!kml) { toast("ใส่ที่อยู่ไฟล์ KML ก่อน"); return; }
+  busy(true, "กำลังจับคู่ช่วง กม. กับเส้นสำรวจ…");
+  try {
+    S.secs = await post("/api/sections", { path: S.scan.path, recursive: S.scan.recursive, kml,
+      buffer_km: (+$("#secBuf").value || 0) / 1000, include: selectedLines().map((l) => l.primary) });
+    for (const s of S.secs.sections) s.include = s.lines.length > 0;
+    keep("lastKml", kml);
+    renderSections();
+  } catch (e) { toast("จับคู่ไม่ได้: " + e.message); } finally { busy(false); }
+}
+function renderSections() {
+  const r = S.secs, have = r.sections.filter((s) => s.lines.length).length;
+  $("#secResult").innerHTML = `<p class="small">${r.sections.length} ช่วง · มีข้อมูล ${have} ช่วง ·
+      ตัดมาประมวลผล ${r.lines.reduce((a, l) => a + l.windows.length, 0)} ช่วงย่อยจาก ${r.lines.length} เส้น รวม ${fmt(r.length_m / 1000, 1)} กม. ต่อช่องสัญญาณ
+      <button class="btn ghost small" data-secsel="all">เลือกทุกช่วงที่มีข้อมูล</button><button class="btn ghost small" data-secsel="none">ไม่เลือก (ประมวลผลทั้งเส้น)</button></p>
+    <div class="scan-table"><table class="scan"><thead><tr><th></th><th>ประเภท</th><th>ลำดับ</th><th>ชื่อพื้นที่</th><th>กม.</th><th>ทาง</th><th>เส้นที่มีข้อมูล (ครอบคลุม)</th></tr></thead><tbody>
+    ${r.sections.map((s, i) => `<tr class="${s.include ? "" : "off"}"><td><input type="checkbox" data-secinc="${i}" ${s.include ? "checked" : ""} ${s.lines.length ? "" : "disabled"}></td>
+      <td>${esc(s.type)}</td><td>${s.seq}</td><td>${esc(s.name)}</td><td>${kmText(s.km0)}–${kmText(s.km1)}</td><td>${esc(s.track)}</td>
+      <td class="small">${s.lines.map((l) => `${esc(l.line)} (${Math.round(l.cover * 100)}%)`).join("<br>") || `<span class="muted">ไม่มีข้อมูล</span>`}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  updateRunBtn();
 }
 function drawScanMap() {
   const lines = S.scan.lines.filter((l) => l.track);
@@ -214,7 +243,15 @@ async function runFolder() {
   busy(true, "กำลังเริ่มงาน…");
   try {
     const info = infoValues($("#infoForm"));
-    S.job = await post("/api/jobs/from-folder", { path: S.scan.path, recursive: S.scan.recursive, include: sel.map((l) => l.primary), ranges, info });
+    const secs = chosenSections().length ? { kml: $("#secKml").value.trim(), ids: chosenSections().map((s) => s.id),
+      buffer_km: (+$("#secBuf").value || 0) / 1000 } : null;
+    const idsCsv = $("#idsCsv").value.trim();
+    keep("lastIdsCsv", idsCsv);
+    const structKml = $("#structKml").value.trim();
+    keep("lastStructKml", structKml);
+    S.job = await post("/api/jobs/from-folder", { path: S.scan.path, recursive: S.scan.recursive, include: sel.map((l) => l.primary), ranges, info,
+      ...(secs ? { sections: secs } : {}), ...(idsCsv ? { ids_ballast_dir: idsCsv } : {}),
+      ...(structKml ? { structures_kml: structKml } : {}) });
     S.job = await post(`/api/jobs/${S.job.job_id}/info`, info);
     openProgress();
   } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
@@ -375,13 +412,41 @@ function renderLine() {
       </div>
       <div class="scroll h" data-scroll="x" title="เลื่อนตามแนวสำรวจ"><div class="thumb"></div></div>
       <div class="xaxis" data-axis="x"></div>
-    </div>`).join("") || `<p class="muted">เลือกภาพที่จะแสดงด้านบน</p>`;
+    </div>`).join("") + idsStrip(l) || `<p class="muted">เลือกภาพที่จะแสดงด้านบน</p>`;
+  drawIdsStrip(l);
   applyZoom();
   showDepthRange();
   renderLineStatus(l);
   renderRecipe(l);
   renderCards(l);
   renderCompare(l);
+}
+// IDS automatic ballast classes (from the IDS software's CSVs) under the radargram, for reference
+const IDS_ROWS = [["fouling", "Fouling", 4, 3], ["moisture_base", "ชื้นฐาน", 2, 254], ["ballast_moisture", "ชื้นหิน", 3, 254], ["undulation", "คลื่น", 5, 2]];
+function idsStrip(l) {
+  if (!l.ids_ballast?.length) return "";
+  return `<div class="pane ids-strip"><div class="pane-cap"><b>ค่าจากซอฟต์แวร์ IDS (Ballast CSV)</b>
+      <span class="muted">แดง/สีเข้ม = ค่ามาก · เทา = ไม่มีค่า · เลขเป็นของ IDS (ยังไม่มีคำอธิบาย) ชี้เมาส์เพื่อดูค่า</span></div>
+    <div class="plot"><div class="yaxis left">${IDS_ROWS.map(([, lab], i) => `<span style="top:${(i + 0.5) * 25}%">${lab}</span>`).join("")}</div>
+      <div class="stripwrap"><div class="xzoom"><canvas id="idsCanvas"></canvas></div></div><div></div><div></div></div></div>`;
+}
+function drawIdsStrip(l) {
+  const c = $("#idsCanvas"); if (!c) return;
+  const W = Math.min(l.n_traces, 4000), H = IDS_ROWS.length, sx = W / l.n_traces;
+  c.width = W; c.height = H;
+  const g = c.getContext("2d");
+  g.fillStyle = "#adb5bd"; g.fillRect(0, 0, W, H);
+  for (const r of l.ids_ballast) IDS_ROWS.forEach(([, , col, max], i) => {
+    const v = r[col]; if (v === 255) return;
+    const t = Math.min(Math.max(v / max, 0), 1);
+    g.fillStyle = max > 10 ? `hsl(210,70%,${92 - 62 * t}%)` : `hsl(${120 - 120 * t},70%,45%)`;
+    g.fillRect(Math.floor(r[0] * sx), i, Math.max(1, Math.ceil((r[1] - r[0] + 1) * sx)), 1);
+  });
+  c.onmousemove = (e) => {
+    const b = c.getBoundingClientRect(), tr = (e.clientX - b.left) / b.width * l.n_traces;
+    const r = l.ids_ballast.find((x) => x[0] <= tr && tr <= x[1]);
+    c.title = r ? `trace ${r[0]}–${r[1]}\n` + IDS_ROWS.map(([k, lab, col]) => `${lab} (${k}): ${r[col] === 255 ? "ไม่มีค่า" : r[col]}`).join("\n") : "";
+  };
 }
 function nice(span, n) {
   const raw = span / n, p = 10 ** Math.floor(Math.log10(raw)), m = raw / p;
@@ -417,6 +482,7 @@ function applyZoom() {
   const l = line(); if (!l) return;
   const { x0, x1, y0, y1 } = S.view, w = x1 - x0, h = y1 - y0;
   $$(".zoomer").forEach((z) => Object.assign(z.style, { left: `${(-x0 / w) * 100}%`, width: `${100 / w}%`, top: `${(-y0 / h) * 100}%`, height: `${100 / h}%` }));
+  $$(".xzoom").forEach((z) => Object.assign(z.style, { left: `${(-x0 / w) * 100}%`, width: `${100 / w}%` }));
   $$('[data-axis="t"]').forEach((a) => (a.innerHTML = yTicks(l, "t")));
   $$('[data-axis="d"]').forEach((a) => (a.innerHTML = yTicks(l, "d")));
   $$('[data-axis="x"]').forEach((a) => (a.innerHTML = xTicks(l)));
@@ -1391,6 +1457,8 @@ document.addEventListener("click", (e) => {
   const br = t.closest("[data-browse]"); if (br) { browse(br.dataset.browse); return; }
   const uf = t.closest("[data-usefolder]"); if (uf) { $("#folderPath").value = uf.dataset.usefolder; scanFolder(); return; }
   if (t.closest("[data-closebrowser]")) { $("#browser").hidden = true; return; }
+  const ss = t.closest("[data-secsel]");
+  if (ss && S.secs) { for (const s of S.secs.sections) s.include = ss.dataset.secsel === "all" && s.lines.length > 0; renderSections(); return; }
   const sl = t.closest("[data-sel]");
   if (sl && S.scan) {
     for (const l of S.scan.lines) l.include = l.status !== "error" && (sl.dataset.sel === "all" || (sl.dataset.sel === "ok" && l.status === "ok"));
@@ -1426,6 +1494,7 @@ document.addEventListener("change", (e) => {
   const t = e.target;
   if (t.id === "statusNote") { update(post(lineUrl("/status"), { status: line().status, note: t.value }), "บันทึกหมายเหตุแล้ว"); return; }
   if (t.dataset.include) { S.scan.lines[+t.dataset.include].include = t.checked; renderScan(); return; }
+  if (t.dataset.secinc) { S.secs.sections[+t.dataset.secinc].include = t.checked; renderSections(); return; }
   if (t.dataset.range) {
     const [i, k] = t.dataset.range.split(":").map(Number), l = S.scan.lines[i];
     l.range = l.range || ["", ""]; l.range[k] = t.value === "" ? "" : +t.value;
@@ -1506,6 +1575,10 @@ $("#scanBtn").addEventListener("click", scanFolder);
 $("#browseBtn").addEventListener("click", () => browse($("#folderPath").value.trim()));
 $("#folderPath").addEventListener("keydown", (e) => { if (e.key === "Enter") scanFolder(); });
 $("#folderPath").value = store("lastFolder", "");
+$("#secBtn").addEventListener("click", matchSections);
+$("#secKml").value = store("lastKml", "");
+$("#idsCsv").value = store("lastIdsCsv", "");
+$("#structKml").value = store("lastStructKml", "");
 $("#toReview").addEventListener("click", async () => { S.job = await api(jobUrl("")); openReview(); });
 $("#resumeBtn").addEventListener("click", resumeJob);
 $("#demoBtn").addEventListener("click", runDemo);

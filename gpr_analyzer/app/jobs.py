@@ -30,13 +30,15 @@ from weakref import WeakValueDictionary
 import numpy as np
 
 from gpr_analyzer.app import compare as cmp
-from gpr_analyzer.app import geo, kml, triage
+from gpr_analyzer.app import geo, gps_lag, kml, triage
+from gpr_analyzer.app.chainage import fmt_km, km_at_trace
 from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
-from gpr_analyzer.core import Radargram, crop_to_range
+from gpr_analyzer.core import Radargram, crop_metadata, crop_to_range
 from gpr_analyzer.detect import analyze_line, to_report_records
 from gpr_analyzer.detect import crossline
 from gpr_analyzer.io import read as read_file
-from gpr_analyzer.io.ids import is_ids_dt
+from gpr_analyzer.io import ids_ballast
+from gpr_analyzer.io.ids import is_ids_dt, read_ids_header, zone_parts
 from gpr_analyzer.processing import ProcessingOptions, ProcessingResult, run_pipeline
 from gpr_analyzer.report import write_report
 from gpr_analyzer.report.compose import Signoff
@@ -46,7 +48,8 @@ from gpr_analyzer.report.schema import (ACTION_LEVELS, CONFIDENCE_LEVELS, SURFAC
                                         Evidence, LineResult, ProcessingStep, SurveyInfo, SurveyResult, Zone)
 
 APP_VERSION = "0.1"
-VIEWS = ("grey", "high_gain", "envelope", "viewpoint", "autodisplay")
+VIEWS = ("grey", "high_gain", "envelope", "viewpoint", "autodisplay", "layers")
+OPTIONAL_VIEWS = ("viewpoint", "autodisplay", "layers")  # tracks an old checkpoint may not have
 EDITABLE = ("trace_start", "trace_end", "time_top_ns", "time_bottom_ns", "suspected_type", "confidence", "action",
             "note")
 # All processing fields must survive imported workflows and checkpoints.
@@ -135,6 +138,15 @@ class LineState:
         """Distance of the first processed trace along the whole line (distances in zones are absolute)."""
         return self.trace_offset * (self.raw.dx_m or 0.0)
 
+    def km(self, trace: float) -> float | None:
+        """Railway km of a trace of this range (from the chosen-section chainage), else None."""
+        return km_at_trace(self.raw.metadata.get("chainage"), trace + self.trace_offset)
+
+    def km_text(self) -> str:
+        """' กม. 36+000–39+100' for a line cut to a railway section, else ''."""
+        k0, k1 = self.km(0), self.km(self.raw.n_traces - 1)
+        return f" กม. {fmt_km(k0)}–{fmt_km(k1)}" if k0 is not None and k1 is not None else ""
+
     @property
     def analysis(self) -> Radargram:
         assert self.result is not None
@@ -153,7 +165,7 @@ class LineState:
 
     # ------------------------------------------------------------------ images
     def views(self) -> list[str]:
-        return [v for v in VIEWS if v not in ("viewpoint", "autodisplay") or getattr(self.result, v) is not None]
+        return [v for v in VIEWS if v not in OPTIONAL_VIEWS or getattr(self.result, v) is not None]
 
     def positions(self) -> tuple[np.ndarray, np.ndarray] | None:
         """(lat, lon) per trace from the .cor GPS, or None."""
@@ -199,7 +211,7 @@ class LineState:
         return LineResult(
             line_id=self.line_id, source_file=self.source_file + (
                 f" ({self.offset_m:.1f}–{self.offset_m + res.analysis.n_traces * (res.analysis.dx_m or 0):.1f} m)"
-                if self.trace_offset else ""), n_traces=res.analysis.n_traces,
+                if self.trace_offset else "") + self.km_text(), n_traces=res.analysis.n_traces,
             n_samples=res.analysis.n_samples, dt_ns=res.analysis.dt_ns, trace_spacing_m=res.analysis.dx_m,
             velocity_m_per_ns=res.velocity_m_per_ns, velocity_source=res.velocity_source_code,
             processing=[ProcessingStep(**s) for s in res.report_steps()],
@@ -218,12 +230,15 @@ class LineState:
             d["suggested_action"] = suggest_action(z, surface_use)
             d["manual"] = z.zone_id not in self.auto_zones
             d["excluded"] = self.excluded(z)
+            d["km_start"], d["km_end"] = self.km(z.trace_start), self.km(z.trace_end)
             zones.append(d)
         return {
             "line_id": self.line_id, "revision": self.revision, "source_file": self.source_file, "channel": self.channel,
             "n_traces": a.n_traces, "n_samples": a.n_samples, "dt_ns": a.dt_ns, "dx_m": a.dx_m,
             "time_window_ns": a.n_samples * a.dt_ns, "views": self.views(),
             "trace_offset": self.trace_offset, "crop": self.raw.metadata.get("crop"),
+            "ids_ballast": self.raw.metadata.get("ids_ballast"),
+            "km_from": self.km(0), "km_to": self.km(a.n_traces - 1),
             "has_gps": self.positions() is not None,
             "velocity_m_per_ns": res.velocity_m_per_ns, "velocity_source": res.velocity_source,
             "velocity_source_code": res.velocity_source_code,
@@ -242,7 +257,7 @@ class LineState:
 def process_line(raw: Radargram, options: ProcessingOptions, line_id: str,
                  progress: Callable[[str], None] | None = None) -> tuple[ProcessingResult, list[dict], list[dict]]:
     """Processing tracks and automatic zones of one line. Module level so a worker process can run it."""
-    res = run_pipeline(raw, options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay"})
+    res = run_pipeline(raw, options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay", "layers"})
     if progress:
         progress("detect")
     det = analyze_line(res.analysis, velocity_m_per_ns=res.velocity_m_per_ns,
@@ -320,6 +335,10 @@ def render_png(res: ProcessingResult, view: str) -> bytes:
         d = res.autodisplay.data
         c = res.autodisplay.metadata["display_clip"]
         img, cmap, lo, hi = d, "gray", -c, c
+    elif view == "layers":
+        d = res.layers.data
+        c = float(np.percentile(np.abs(d[d.shape[0] // 8:]), 99.0)) or 1.0  # below the direct wave
+        img, cmap, lo, hi = d, "gray", -c, c
     elif view == "high_gain":
         d = res.display.data
         c = float(np.percentile(np.abs(d), 95.0)) or 1.0
@@ -349,6 +368,8 @@ class Job:
     created: str = field(default_factory=_now)
     comparison: dict[str, Any] = field(default_factory=cmp.new_state)  # see compare.py
     source_folder: str = ""  # survey read in place from this folder ("" = files uploaded into uploads/)
+    ids_ballast_dir: str = ""  # folder of IDS automatic ballast CSVs shown under IDS lines ("" = none)
+    structures_kml: str = ""  # bridges/culverts KML that sets the GPS lag of each IDS zone ("" = no correction)
     plan: list[dict[str, Any]] = field(default_factory=list)
     screen_reviews: dict[str, dict[str, Any]] = field(default_factory=dict)  # "line/item" -> decision (triage.py)
     progress: dict[str, Any] = field(default_factory=lambda: {"state": "done"})
@@ -356,6 +377,8 @@ class Job:
     _thread: threading.Thread | None = field(default=None, repr=False)
     _log_tail: list[str] = field(default_factory=list, repr=False)
     _pending_lines: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+    _ballast_idx: dict[Path, dict[tuple[int, int], Path]] | None = field(default=None, repr=False)
+    _lags: dict[str, tuple | None] = field(default_factory=dict, repr=False)  # gps_lag.zone_lag() by zone folder
     _hash_cache: dict[tuple, str] = field(default_factory=dict, repr=False)  # input file SHA-256 by (path, size, mtime)
 
     @property
@@ -388,8 +411,12 @@ class Job:
         self.run_plan()
 
     def plan_files(self, paths: list[Path], ranges: dict[str, list[float]] | None = None,
-                   include: set[str] | None = None) -> None:
-        """ranges / include are keyed by the primary file's full path (as scan_folder reports it)."""
+                   include: set[str] | None = None, windows: dict[str, list[dict[str, Any]]] | None = None) -> None:
+        """ranges / include / windows are keyed by the primary file's full path (as scan_folder reports it).
+
+        windows (chainage.plan_windows) gives a line several ranges, each its own plan entry with a label
+        and the [[trace, km]] that turns its traces into railway km.
+        """
         s = sort_files(paths)
         groups = sorted(s.groups, key=lambda g: str(g.primary).lower())
         if include is not None:
@@ -400,10 +427,14 @@ class Job:
             if r is not None:
                 lo, hi = (None if v in (None, "") else float(v) for v in r)
                 r = None if lo is None and hi is None else [lo, hi]
-            self.plan.append({"index": len(self.plan), "primary": str(g.primary),
-                              "name": g.stem if g.family == "ids" else g.primary.name,
-                              "family": g.family, "companions": [str(c) for c in g.companions], "range_m": r,
-                              "state": "waiting", "step": "", "line_ids": [], "error": None})
+            name = g.stem if g.family == "ids" else g.primary.name
+            for w in (windows or {}).get(str(g.primary)) or [None]:
+                self.plan.append({"index": len(self.plan), "primary": str(g.primary),
+                                  "name": f"{name} {w['label']}" if w else name,
+                                  "family": g.family, "companions": [str(c) for c in g.companions],
+                                  "range_m": list(w["range_m"]) if w else r,
+                                  "state": "waiting", "step": "", "line_ids": [], "error": None,
+                                  **({"chainage": w["chainage"], "sections": w.get("sections", [])} if w else {})})
         self.unassigned = [_companion(p) for p in s.unassigned]
         self.problems = [{"file": p.name, "error": "unknown_format"} for p in s.unassigned
                          if p.suffix.lower() not in {".txt", ".csv", ".cor", ".gps", ".xml", ".ini", ".json", ".log",
@@ -473,10 +504,23 @@ class Job:
             self._entry_failed(e, f"{type(ex).__name__}: {ex}")
             return
         comps = [_companion(Path(c)) for c in e["companions"] if Path(c).exists()]
+        lag = self._gps_lag(primary) if e["family"] == "ids" and self.structures_kml else None
+        chain = e.get("chainage")
+        if lag and chain:
+            chain = [[t - lag[0], k] for t, k in chain]
         ids = []
         for ch, rg in enumerate(rgs):
+            if lag:  # the zone's shifted fixes, cropped like the data (keeps the anchors past both ends)
+                c = rg.metadata.get("crop")
+                gps = crop_metadata({"gps": lag[1]}, c["trace_start"], c["trace_end"], c["n_traces_file"],
+                                    rg.dx_m or 0.0)["gps"] if c else lag[1]
+                rg.metadata.update(gps=gps, gps_lag_traces=lag[0])
             line_id = f"L{e['index'] + 1}" if len(rgs) == 1 else f"L{e['index'] + 1}-ch{ch + 1}"
             offset = rg.metadata.get("crop", {}).get("trace_start", 0)
+            if e["family"] == "ids" and self.ids_ballast_dir:
+                self._attach_ids_ballast(primary, rg, offset)
+            if chain:
+                rg.metadata.update(chainage=chain, sections=", ".join(e.get("sections", [])))
             ln = LineState(line_id=line_id, source_file=primary.name, channel=ch + 1 if len(rgs) > 1 else None,
                            raw=rg, companions=comps, trace_offset=offset)
             saved = self._pending_lines.get(line_id)
@@ -503,6 +547,42 @@ class Job:
             e.update(state="done", step="", line_ids=ids)
             self.save()
 
+    def _gps_lag(self, primary: Path) -> tuple[int, list[dict[str, Any]]] | None:
+        """(GPS lag in traces, the zone's shifted GPS rows) of the IDS zone holding primary, measured once per zone."""
+        key = str(primary.parent)
+        if key not in self._lags:
+            self.log(f"{primary.parent.name}: วัดค่าเลื่อน GPS จากตำแหน่งสะพาน")
+            try:
+                self._lags[key] = gps_lag.zone_lag(primary, gps_lag.read_points(self.structures_kml))
+            except Exception as ex:  # noqa: BLE001 - the correction is optional; say why it is missing
+                self.log(f"{primary.parent.name}: วัดค่าเลื่อน GPS ไม่ได้ ({type(ex).__name__}: {ex})")
+                self._lags[key] = None
+                return None
+            r = self._lags[key]
+            dx = read_ids_header(primary).get("dx_m") or 0.0
+            self.log(f"{primary.parent.name}: เลื่อนตำแหน่ง GPS กลับ {r[0] * dx:.1f} ม. (วัดจากสะพาน {r[1]} แห่ง)" if r else
+                     f"{primary.parent.name}: พบสะพานตรงกันไม่ถึง {gps_lag.MIN_MATCHES} แห่ง จึงไม่เลื่อนตำแหน่ง GPS")
+        r = self._lags[key]
+        return (r[0], r[2]) if r else None
+
+    def _attach_ids_ballast(self, primary: Path, rg: Radargram, offset: int) -> None:
+        """The IDS automatic ballast classes of this channel, per trace range of this line."""
+        try:
+            if self._ballast_idx is None:
+                self._ballast_idx = ids_ballast.index(self.ids_ballast_dir)
+            ch = int(rg.metadata.get("channel") or 1)
+            parts = zone_parts(primary.parent).get(ch) or []
+            counts = [read_ids_header(p)["n_traces"] for p in parts]
+            rows, folder = ids_ballast.zone_rows(self._ballast_idx, ch, counts, rg.dx_m or 0.0)
+        except Exception as ex:  # noqa: BLE001 - the reference is optional; say why it is missing
+            self.log(f"{primary.parent.name} ช่อง {rg.metadata.get('channel')}: อ่าน Ballast CSV ของ IDS ไม่ได้ ({ex})")
+            return
+        if folder is None:
+            self.log(f"{primary.parent.name} ช่อง {ch}: ไม่พบ Ballast CSV ของ IDS ที่ตรงกับเส้นนี้")
+            return
+        rg.metadata["ids_ballast"] = ids_ballast.crop_rows(rows, offset, offset + rg.n_traces - 1)
+        rg.metadata["ids_ballast_folder"] = str(folder)
+
     def _entry_failed(self, e: dict[str, Any], msg: str) -> None:
         with self.lock:
             e.update(state="error", error=msg)
@@ -527,7 +607,7 @@ class Job:
         d = self.checkpoint_path(ln.line_id)
         d.parent.mkdir(exist_ok=True)
         res = ln.result
-        slim = ProcessingResult(**{**{f.name: getattr(res, f.name) for f in fields(res)}, "layers": None, "energy": None,
+        slim = ProcessingResult(**{**{f.name: getattr(res, f.name) for f in fields(res)}, "energy": None,
                                    "log": list(res.log)})
         rec = {"version": CHECKPOINT_VERSION, "app_version": APP_VERSION, "processing_revision": PROCESSING_REVISION, "source": e["primary"],
                "source_stamp": _stamp(Path(e["primary"])), "range_m": e["range_m"],
@@ -869,6 +949,7 @@ class Job:
         state = {
             "version": 2, "job_id": self.job_id, "created": self.created, "saved": _now(), "info": asdict(self.info),
             "lang": self.lang, "reviewer": self.reviewer, "source_folder": self.source_folder,
+            "ids_ballast_dir": self.ids_ballast_dir, "structures_kml": self.structures_kml,
             "plan": self.plan, "progress": self.progress, "problems": self.problems, "unassigned": self.unassigned,
             "lines": [{"line_id": ln.line_id, "source_file": ln.source_file, "options": options_dict(ln.options),
                        "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones, "sections": ln.sections,
@@ -903,6 +984,8 @@ class Job:
         job.comparison = cmp.upgrade_state(st.get("comparison") or cmp.new_state())
         job.source_folder = st.get("source_folder", "")
         job.screen_reviews = st.get("screen_reviews", {})
+        job.ids_ballast_dir = st.get("ids_ballast_dir", "")
+        job.structures_kml = st.get("structures_kml", "")
         if "plan" not in st:  # version 1: no plan or checkpoints yet
             job.load(sorted(p for p in job.upload_dir.iterdir() if p.is_file()))
         else:
@@ -1407,7 +1490,7 @@ def line_summary_rows(job_id: str, project: str, comp: dict[str, Any]) -> list[d
 
 LINE_STATUS = ("pending", "approved", "redo")
 CHECKPOINT_VERSION = 1
-PROCESSING_REVISION = 2  # depth/reference semantics; independent of UI or package releases
+PROCESSING_REVISION = 3  # 3: surface-change artifacts + layers track; independent of UI or package releases
 
 
 def _iou(a: Zone, b: Zone) -> float:
@@ -1497,6 +1580,7 @@ def line_summary(ln: LineState) -> str:
     a, res = ln.analysis, ln.result
     length = f"{a.n_traces * a.dx_m:.1f} m" if a.dx_m else "ไม่ทราบระยะ"
     rng = f" ช่วง {ln.offset_m:.1f}–{ln.offset_m + a.n_traces * (a.dx_m or 0):.1f} m" if ln.trace_offset else ""
+    rng += ln.km_text()
     counts: dict[str, int] = {}
     for z in ln.zones:
         counts[z.suspected_type] = counts.get(z.suspected_type, 0) + 1
@@ -1507,6 +1591,8 @@ def line_summary(ln: LineState) -> str:
         if z.suspected_type == "void_like" and z.confidence in ("high", "medium"):
             where = (f"{z.distance_start_m:.1f}–{z.distance_end_m:.1f} m" if z.distance_start_m is not None
                      else f"trace {z.trace_start}–{z.trace_end}")
+            if ln.km(z.trace_start) is not None:
+                where += f" (กม. {fmt_km(ln.km(z.trace_start))})"
             txt += (f"\n    ⚠ น่าสงสัย {z.zone_id}: {TYPE_TH[z.suspected_type]} เชื่อมั่น{CONF_TH[z.confidence]} ที่ {where}"
                     f" ลึก {z.depth_top_m:.2f}–{z.depth_bottom_m:.2f} m")
     return txt

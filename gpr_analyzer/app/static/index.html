@@ -59,6 +59,19 @@
       </div>
       <div class="scan-table"><table class="scan"><thead><tr><th></th><th>สถานะ</th><th>เส้น</th><th>trace</th><th>ความยาว</th><th>GPS</th>
         <th>points/m · traces/m<br>เวลาเริ่ม–จบ (GPS)</th><th>มาร์ก</th><th>ช่วงที่ประมวลผล (m)</th><th>ข้อสังเกต</th></tr></thead><tbody id="scanRows"></tbody></table></div>
+      <div class="sec-box">
+        <h4>เฉพาะช่วง กม. ตาม KML ของโครงการ <span class="muted small">(เช่น จุดเสี่ยง: KML ที่มีแนวเส้นทางบอก กม. และช่วงที่มี "ลำดับ")</span></h4>
+        <div class="folder-bar">
+          <input id="secKml" placeholder="ที่อยู่ไฟล์ KML เช่น D:\โครงการ\ข้อมูลประกอบพื้นที่สำรวจ.kml" spellcheck="false">
+          <label class="small">เผื่อหัวท้าย <input id="secBuf" type="number" value="100" min="0" step="10" style="width:5em"> m</label>
+          <button class="btn" id="secBtn">จับคู่ช่วง กม.</button>
+        </div>
+        <div id="secResult"></div>
+        <div class="folder-bar">
+          <input id="idsCsv" placeholder="ไม่บังคับ: โฟลเดอร์ Ballast Fouling CSV ของ IDS (เช่น ...\Ballast Fouling\North csv) เพื่อแสดงแถบค่าใต้ภาพ" spellcheck="false">
+          <input id="structKml" placeholder="ไม่บังคับ: KML ตำแหน่งสะพาน/ท่อลอด เพื่อแก้ตำแหน่ง GPS ของ IDS ที่คลาดไปตามแนวทาง (วัดแยกรายเส้น)" spellcheck="false">
+        </div>
+      </div>
     </div>
   </section>
 

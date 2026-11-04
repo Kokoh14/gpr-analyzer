@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gpr_analyzer.app import folders, geo, kml, scene3d, triage, volume3d
+from gpr_analyzer.app import chainage, folders, geo, kml, scene3d, triage, volume3d
 from gpr_analyzer.app.files import safe_name
 from gpr_analyzer.app.compare import TEMPLATE_CSV
 from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
@@ -68,9 +68,10 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
             paths.append(p)
         return begin(j, paths)
 
-    def begin(j: Job, paths: list[Path], ranges: dict | None = None, include: set[str] | None = None) -> dict:
+    def begin(j: Job, paths: list[Path], ranges: dict | None = None, include: set[str] | None = None,
+              windows: dict | None = None) -> dict:
         with j.lock:
-            j.plan_files(paths, ranges, include)
+            j.plan_files(paths, ranges, include, windows)
             j.save()
         if background:
             j.start()
@@ -95,17 +96,39 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
     def scan(body: dict = Body(...)) -> dict:
         return guarded(folders.scan_folder, str(body.get("path", "")), bool(body.get("recursive")))
 
+    @app.post("/api/sections")
+    def sections(body: dict = Body(...)) -> dict:
+        """Sections of a reference KML (e.g. risk points) matched to the lines of a data folder."""
+        include = set(body["include"]) if body.get("include") is not None else None
+        return guarded(chainage.match_folder, str(body.get("path", "")), str(body.get("kml", "")),
+                       bool(body.get("recursive")), include, None, float(body.get("buffer_km", 0.1)))
+
     @app.post("/api/jobs/from-folder")
     def from_folder(body: dict = Body(...)) -> dict:
         path = str(body.get("path", ""))
         files = guarded(folders.folder_files, path, bool(body.get("recursive")))
         include = set(body["include"]) if body.get("include") is not None else None
+        windows = None
+        if body.get("sections"):  # {kml, ids, buffer_km}: process only the chosen sections' windows
+            sec = body["sections"]
+            m = guarded(chainage.match_folder, path, str(sec.get("kml", "")), bool(body.get("recursive")), include,
+                        set(sec.get("ids") or []), float(sec.get("buffer_km", 0.1)))
+            windows = chainage.plan_windows(m)
+            include = set(windows)
+        ballast = str(body.get("ids_ballast_dir") or "").strip()
+        if ballast and not Path(ballast).expanduser().is_dir():
+            raise HTTPException(400, f"not a folder: {ballast}")
         j = store.new()
         j.source_folder = str(Path(path).expanduser())
+        j.ids_ballast_dir = str(Path(ballast).expanduser()) if ballast else ""
+        structures = str(body.get("structures_kml") or "").strip()
+        if structures and not Path(structures).expanduser().is_file():
+            raise HTTPException(400, f"not a file: {structures}")
+        j.structures_kml = str(Path(structures).expanduser()) if structures else ""
         if body.get("info"):
             with j.lock:
                 guarded(j.set_info, body["info"])
-        return begin(j, files, body.get("ranges") or {}, include)
+        return begin(j, files, body.get("ranges") or {}, include, windows)
 
     @app.get("/api/jobs/{job_id}/progress")
     def progress(job_id: str) -> dict:
