@@ -31,6 +31,7 @@ import numpy as np
 
 from gpr_analyzer.app import compare as cmp
 from gpr_analyzer.app import geo, kml
+from gpr_analyzer.app.chainage import fmt_km, km_at_trace
 from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
 from gpr_analyzer.core import Radargram, crop_to_range
 from gpr_analyzer.detect import analyze_line, to_report_records
@@ -135,6 +136,15 @@ class LineState:
         """Distance of the first processed trace along the whole line (distances in zones are absolute)."""
         return self.trace_offset * (self.raw.dx_m or 0.0)
 
+    def km(self, trace: float) -> float | None:
+        """Railway km of a trace of this range (from the chosen-section chainage), else None."""
+        return km_at_trace(self.raw.metadata.get("chainage"), trace + self.trace_offset)
+
+    def km_text(self) -> str:
+        """' กม. 36+000–39+100' for a line cut to a railway section, else ''."""
+        k0, k1 = self.km(0), self.km(self.raw.n_traces - 1)
+        return f" กม. {fmt_km(k0)}–{fmt_km(k1)}" if k0 is not None and k1 is not None else ""
+
     @property
     def analysis(self) -> Radargram:
         assert self.result is not None
@@ -199,7 +209,7 @@ class LineState:
         return LineResult(
             line_id=self.line_id, source_file=self.source_file + (
                 f" ({self.offset_m:.1f}–{self.offset_m + res.analysis.n_traces * (res.analysis.dx_m or 0):.1f} m)"
-                if self.trace_offset else ""), n_traces=res.analysis.n_traces,
+                if self.trace_offset else "") + self.km_text(), n_traces=res.analysis.n_traces,
             n_samples=res.analysis.n_samples, dt_ns=res.analysis.dt_ns, trace_spacing_m=res.analysis.dx_m,
             velocity_m_per_ns=res.velocity_m_per_ns, velocity_source=res.velocity_source_code,
             processing=[ProcessingStep(**s) for s in res.report_steps()],
@@ -218,12 +228,14 @@ class LineState:
             d["suggested_action"] = suggest_action(z, surface_use)
             d["manual"] = z.zone_id not in self.auto_zones
             d["excluded"] = self.excluded(z)
+            d["km_start"], d["km_end"] = self.km(z.trace_start), self.km(z.trace_end)
             zones.append(d)
         return {
             "line_id": self.line_id, "revision": self.revision, "source_file": self.source_file, "channel": self.channel,
             "n_traces": a.n_traces, "n_samples": a.n_samples, "dt_ns": a.dt_ns, "dx_m": a.dx_m,
             "time_window_ns": a.n_samples * a.dt_ns, "views": self.views(),
             "trace_offset": self.trace_offset, "crop": self.raw.metadata.get("crop"),
+            "km_from": self.km(0), "km_to": self.km(a.n_traces - 1),
             "has_gps": self.positions() is not None,
             "velocity_m_per_ns": res.velocity_m_per_ns, "velocity_source": res.velocity_source,
             "velocity_source_code": res.velocity_source_code,
@@ -387,8 +399,12 @@ class Job:
         self.run_plan()
 
     def plan_files(self, paths: list[Path], ranges: dict[str, list[float]] | None = None,
-                   include: set[str] | None = None) -> None:
-        """ranges / include are keyed by the primary file's full path (as scan_folder reports it)."""
+                   include: set[str] | None = None, windows: dict[str, list[dict[str, Any]]] | None = None) -> None:
+        """ranges / include / windows are keyed by the primary file's full path (as scan_folder reports it).
+
+        windows (chainage.plan_windows) gives a line several ranges, each its own plan entry with a label
+        and the [[trace, km]] that turns its traces into railway km.
+        """
         s = sort_files(paths)
         groups = sorted(s.groups, key=lambda g: str(g.primary).lower())
         if include is not None:
@@ -399,10 +415,14 @@ class Job:
             if r is not None:
                 lo, hi = (None if v in (None, "") else float(v) for v in r)
                 r = None if lo is None and hi is None else [lo, hi]
-            self.plan.append({"index": len(self.plan), "primary": str(g.primary),
-                              "name": g.stem if g.family == "ids" else g.primary.name,
-                              "family": g.family, "companions": [str(c) for c in g.companions], "range_m": r,
-                              "state": "waiting", "step": "", "line_ids": [], "error": None})
+            name = g.stem if g.family == "ids" else g.primary.name
+            for w in (windows or {}).get(str(g.primary)) or [None]:
+                self.plan.append({"index": len(self.plan), "primary": str(g.primary),
+                                  "name": f"{name} {w['label']}" if w else name,
+                                  "family": g.family, "companions": [str(c) for c in g.companions],
+                                  "range_m": list(w["range_m"]) if w else r,
+                                  "state": "waiting", "step": "", "line_ids": [], "error": None,
+                                  **({"chainage": w["chainage"], "sections": w.get("sections", [])} if w else {})})
         self.unassigned = [_companion(p) for p in s.unassigned]
         self.problems = [{"file": p.name, "error": "unknown_format"} for p in s.unassigned
                          if p.suffix.lower() not in {".txt", ".csv", ".cor", ".gps", ".xml", ".ini", ".json", ".log",
@@ -476,6 +496,8 @@ class Job:
         for ch, rg in enumerate(rgs):
             line_id = f"L{e['index'] + 1}" if len(rgs) == 1 else f"L{e['index'] + 1}-ch{ch + 1}"
             offset = rg.metadata.get("crop", {}).get("trace_start", 0)
+            if e.get("chainage"):
+                rg.metadata.update(chainage=e["chainage"], sections=", ".join(e.get("sections", [])))
             ln = LineState(line_id=line_id, source_file=primary.name, channel=ch + 1 if len(rgs) > 1 else None,
                            raw=rg, companions=comps, trace_offset=offset)
             saved = self._pending_lines.get(line_id)
@@ -1468,6 +1490,7 @@ def line_summary(ln: LineState) -> str:
     a, res = ln.analysis, ln.result
     length = f"{a.n_traces * a.dx_m:.1f} m" if a.dx_m else "ไม่ทราบระยะ"
     rng = f" ช่วง {ln.offset_m:.1f}–{ln.offset_m + a.n_traces * (a.dx_m or 0):.1f} m" if ln.trace_offset else ""
+    rng += ln.km_text()
     counts: dict[str, int] = {}
     for z in ln.zones:
         counts[z.suspected_type] = counts.get(z.suspected_type, 0) + 1
@@ -1478,6 +1501,8 @@ def line_summary(ln: LineState) -> str:
         if z.suspected_type == "void_like" and z.confidence in ("high", "medium"):
             where = (f"{z.distance_start_m:.1f}–{z.distance_end_m:.1f} m" if z.distance_start_m is not None
                      else f"trace {z.trace_start}–{z.trace_end}")
+            if ln.km(z.trace_start) is not None:
+                where += f" (กม. {fmt_km(ln.km(z.trace_start))})"
             txt += (f"\n    ⚠ น่าสงสัย {z.zone_id}: {TYPE_TH[z.suspected_type]} เชื่อมั่น{CONF_TH[z.confidence]} ที่ {where}"
                     f" ลึก {z.depth_top_m:.2f}–{z.depth_bottom_m:.2f} m")
     return txt

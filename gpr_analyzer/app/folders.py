@@ -192,6 +192,30 @@ def check_impulseradar(primary: Path) -> dict[str, Any]:
     return out
 
 
+def _ids_fixes(files: list[Path], heads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """GPS fixes of one channel's parts, the n-th fix of a part placed evenly along that part."""
+    rows, offset = [], 0
+    for p, h in zip(files, heads):
+        gps = next((q for q in p.parent.glob(p.stem + ".*") if q.suffix.lower() == ".gps"), None)
+        fixes = read_gga(gps) if gps is not None else []
+        step = h["n_traces"] / max(len(fixes), 1)
+        rows += [{"trace": int(offset + k * step), **f} for k, f in enumerate(fixes) if f and f["quality"] > 0]
+        offset += h["n_traces"]
+    return rows
+
+
+def line_fixes(primary: Path, family: str) -> tuple[list[dict[str, Any]], int, float | None]:
+    """(GPS fixes with their trace, number of traces, trace spacing) of one line, from headers and GPS files."""
+    if family == "ids":
+        files = zone_parts(primary.parent)
+        files = files[min(files)]
+        heads = [read_ids_header(p) for p in files]
+        return _ids_fixes(files, heads), sum(h["n_traces"] for h in heads), heads[0].get("dx_m")
+    info = check_impulseradar(primary)
+    cor = _side_file(primary.with_suffix(".iprb"), ".cor")
+    return (read_cor(cor) if cor is not None else []), info.get("n_traces", 0), info.get("dx_m")
+
+
 def check_ids(primary: Path) -> dict[str, Any]:
     """Channels, parts, length and GPS of one IDS zone from the part headers and .GPS files.
 
@@ -215,13 +239,7 @@ def check_ids(primary: Path) -> dict[str, Any]:
                           + ", ".join(f"ช่อง {c}: {n}" for c, n in counts.items())))
     if not dx:
         iss.append(_issue("warn", "no_spacing", "ไม่มีระยะห่าง trace (แสดงระยะเป็นเมตรไม่ได้)"))
-    rows, offset = [], 0
-    for p, h in zip(parts[min(parts)], heads[min(heads)]):
-        gps = next((q for q in p.parent.glob(p.stem + ".*") if q.suffix.lower() == ".gps"), None)
-        fixes = read_gga(gps) if gps is not None else []
-        step = h["n_traces"] / max(len(fixes), 1)
-        rows += [{"trace": int(offset + k * step), **f} for k, f in enumerate(fixes) if f and f["quality"] > 0]
-        offset += h["n_traces"]
+    rows = _ids_fixes(parts[min(parts)], heads[min(heads)])
     out["gps_fixes"] = len(rows)
     out["positioning"] = positioning_qa(rows, n_traces, dx)
     pos = geo.trace_positions(rows, max(n_traces, 1)) if len(rows) >= 2 else None

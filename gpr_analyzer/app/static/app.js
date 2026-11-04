@@ -132,6 +132,7 @@ async function scanFolder() {
   try {
     S.scan = await post("/api/scan", { path, recursive: $("#recursive").checked });
     for (const ln of S.scan.lines) ln.include = ln.status !== "error";
+    S.secs = null; $("#secResult").innerHTML = "";
     keep("lastFolder", path);
     $("#browser").hidden = true;
     renderScan();
@@ -166,9 +167,36 @@ function renderScan() {
   drawScanMap();
 }
 function updateRunBtn() {
-  const n = selectedLines().length;
+  const n = selectedLines().length, ns = chosenSections().length;
   $("#runBtn").disabled = !(n || S.files.length);
-  $("#runBtn").textContent = n ? `เริ่มประมวลผล ${n} เส้นจากโฟลเดอร์` : "เริ่มวิเคราะห์";
+  $("#runBtn").textContent = ns ? `เริ่มประมวลผลเฉพาะ ${ns} ช่วง กม. ที่เลือก` : n ? `เริ่มประมวลผล ${n} เส้นจากโฟลเดอร์` : "เริ่มวิเคราะห์";
+}
+// sections of a project KML (risk points): only their windows are processed, results shown in railway km
+const chosenSections = () => (S.secs?.sections || []).filter((s) => s.include);
+const kmText = (k) => k == null ? "–" : `${Math.floor(k)}+${String(Math.round((k % 1) * 1000)).padStart(3, "0")}`;
+async function matchSections() {
+  const kml = $("#secKml").value.trim();
+  if (!kml) { toast("ใส่ที่อยู่ไฟล์ KML ก่อน"); return; }
+  busy(true, "กำลังจับคู่ช่วง กม. กับเส้นสำรวจ…");
+  try {
+    S.secs = await post("/api/sections", { path: S.scan.path, recursive: S.scan.recursive, kml,
+      buffer_km: (+$("#secBuf").value || 0) / 1000, include: selectedLines().map((l) => l.primary) });
+    for (const s of S.secs.sections) s.include = s.lines.length > 0;
+    keep("lastKml", kml);
+    renderSections();
+  } catch (e) { toast("จับคู่ไม่ได้: " + e.message); } finally { busy(false); }
+}
+function renderSections() {
+  const r = S.secs, have = r.sections.filter((s) => s.lines.length).length;
+  $("#secResult").innerHTML = `<p class="small">${r.sections.length} ช่วง · มีข้อมูล ${have} ช่วง ·
+      ตัดมาประมวลผล ${r.lines.reduce((a, l) => a + l.windows.length, 0)} ช่วงย่อยจาก ${r.lines.length} เส้น รวม ${fmt(r.length_m / 1000, 1)} กม. ต่อช่องสัญญาณ
+      <button class="btn ghost small" data-secsel="all">เลือกทุกช่วงที่มีข้อมูล</button><button class="btn ghost small" data-secsel="none">ไม่เลือก (ประมวลผลทั้งเส้น)</button></p>
+    <div class="scan-table"><table class="scan"><thead><tr><th></th><th>ประเภท</th><th>ลำดับ</th><th>ชื่อพื้นที่</th><th>กม.</th><th>ทาง</th><th>เส้นที่มีข้อมูล (ครอบคลุม)</th></tr></thead><tbody>
+    ${r.sections.map((s, i) => `<tr class="${s.include ? "" : "off"}"><td><input type="checkbox" data-secinc="${i}" ${s.include ? "checked" : ""} ${s.lines.length ? "" : "disabled"}></td>
+      <td>${esc(s.type)}</td><td>${s.seq}</td><td>${esc(s.name)}</td><td>${kmText(s.km0)}–${kmText(s.km1)}</td><td>${esc(s.track)}</td>
+      <td class="small">${s.lines.map((l) => `${esc(l.line)} (${Math.round(l.cover * 100)}%)`).join("<br>") || `<span class="muted">ไม่มีข้อมูล</span>`}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  updateRunBtn();
 }
 function drawScanMap() {
   const lines = S.scan.lines.filter((l) => l.track);
@@ -214,7 +242,10 @@ async function runFolder() {
   busy(true, "กำลังเริ่มงาน…");
   try {
     const info = infoValues($("#infoForm"));
-    S.job = await post("/api/jobs/from-folder", { path: S.scan.path, recursive: S.scan.recursive, include: sel.map((l) => l.primary), ranges, info });
+    const secs = chosenSections().length ? { kml: $("#secKml").value.trim(), ids: chosenSections().map((s) => s.id),
+      buffer_km: (+$("#secBuf").value || 0) / 1000 } : null;
+    S.job = await post("/api/jobs/from-folder", { path: S.scan.path, recursive: S.scan.recursive, include: sel.map((l) => l.primary), ranges, info,
+      ...(secs ? { sections: secs } : {}) });
     S.job = await post(`/api/jobs/${S.job.job_id}/info`, info);
     openProgress();
   } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
@@ -1175,6 +1206,8 @@ document.addEventListener("click", (e) => {
   const br = t.closest("[data-browse]"); if (br) { browse(br.dataset.browse); return; }
   const uf = t.closest("[data-usefolder]"); if (uf) { $("#folderPath").value = uf.dataset.usefolder; scanFolder(); return; }
   if (t.closest("[data-closebrowser]")) { $("#browser").hidden = true; return; }
+  const ss = t.closest("[data-secsel]");
+  if (ss && S.secs) { for (const s of S.secs.sections) s.include = ss.dataset.secsel === "all" && s.lines.length > 0; renderSections(); return; }
   const sl = t.closest("[data-sel]");
   if (sl && S.scan) {
     for (const l of S.scan.lines) l.include = l.status !== "error" && (sl.dataset.sel === "all" || (sl.dataset.sel === "ok" && l.status === "ok"));
@@ -1210,6 +1243,7 @@ document.addEventListener("change", (e) => {
   const t = e.target;
   if (t.id === "statusNote") { update(post(lineUrl("/status"), { status: line().status, note: t.value }), "บันทึกหมายเหตุแล้ว"); return; }
   if (t.dataset.include) { S.scan.lines[+t.dataset.include].include = t.checked; renderScan(); return; }
+  if (t.dataset.secinc) { S.secs.sections[+t.dataset.secinc].include = t.checked; renderSections(); return; }
   if (t.dataset.range) {
     const [i, k] = t.dataset.range.split(":").map(Number), l = S.scan.lines[i];
     l.range = l.range || ["", ""]; l.range[k] = t.value === "" ? "" : +t.value;
@@ -1289,6 +1323,8 @@ $("#scanBtn").addEventListener("click", scanFolder);
 $("#browseBtn").addEventListener("click", () => browse($("#folderPath").value.trim()));
 $("#folderPath").addEventListener("keydown", (e) => { if (e.key === "Enter") scanFolder(); });
 $("#folderPath").value = store("lastFolder", "");
+$("#secBtn").addEventListener("click", matchSections);
+$("#secKml").value = store("lastKml", "");
 $("#toReview").addEventListener("click", async () => { S.job = await api(jobUrl("")); openReview(); });
 $("#resumeBtn").addEventListener("click", resumeJob);
 $("#demoBtn").addEventListener("click", runDemo);
