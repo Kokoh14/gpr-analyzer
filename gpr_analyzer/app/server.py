@@ -6,6 +6,7 @@ these routes only.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -57,8 +58,15 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         return store.summaries()
 
     @app.post("/api/jobs")
-    def create_job(files: list[UploadFile] = File(...)) -> dict:
+    def create_job(files: list[UploadFile] = File(...), workspace: str = Form("")) -> dict:
         j = store.new()
+        if workspace:
+            try:
+                ws = json.loads(workspace)
+            except json.JSONDecodeError:
+                raise HTTPException(400, "workspace is not JSON") from None
+            with j.lock:
+                guarded(j.set_workspace, ws)
         paths = []
         for f in files:
             p = j.upload_dir / safe_name(f.filename or "upload.bin")
@@ -128,6 +136,9 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         if body.get("info"):
             with j.lock:
                 guarded(j.set_info, body["info"])
+        if body.get("workspace"):
+            with j.lock:
+                guarded(j.set_workspace, body["workspace"])
         return begin(j, files, body.get("ranges") or {}, include, windows)
 
     @app.get("/api/jobs/{job_id}/progress")
@@ -202,6 +213,9 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
     def get_scene3d(job_id: str, frame: str = "gps", track: str = "grey") -> dict:
         j = job(job_id)
         with j.lock:
+            if track == "viewpoint":  # made on first use when the workspace left it out of processing
+                for ln in j.lines:
+                    ln.ensure_view("viewpoint")
             frozen = scene3d.snapshot(j)
         return guarded(scene3d.survey_scene, frozen, frame, track)
 
@@ -220,6 +234,13 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
             frozen = scene3d.snapshot(j)
         return guarded(render, frozen, body.get("top_m"), body.get("bottom_m"),
                        body.get("contrast_db", 40), body.get("frame", "gps"))
+
+    @app.put("/api/jobs/{job_id}/workspace")
+    def set_workspace(job_id: str, body: dict = Body(...)) -> dict:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.set_workspace, body)
+            return j.workspace
 
     @app.post("/api/jobs/{job_id}/info")
     def set_info(job_id: str, body: dict = Body(...)) -> dict:

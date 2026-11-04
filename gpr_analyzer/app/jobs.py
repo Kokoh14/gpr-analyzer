@@ -22,6 +22,7 @@ from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import asdict, dataclass, field, fields
+from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -50,6 +51,8 @@ from gpr_analyzer.report.schema import (ACTION_LEVELS, CONFIDENCE_LEVELS, SURFAC
 APP_VERSION = "0.1"
 VIEWS = ("grey", "high_gain", "envelope", "viewpoint", "autodisplay", "layers")
 OPTIONAL_VIEWS = ("viewpoint", "autodisplay", "layers")  # tracks an old checkpoint may not have
+LINE_TRACKS = frozenset({"analysis", "envelope", "display", *OPTIONAL_VIEWS})
+WORKSPACE_STATES = ("now", "open", "off")  # compute at processing / compute when the panel is opened / not used
 EDITABLE = ("trace_start", "trace_end", "time_top_ns", "time_bottom_ns", "suspected_type", "confidence", "action",
             "note")
 # All processing fields must survive imported workflows and checkpoints.
@@ -113,16 +116,17 @@ class LineState:
     status_note: str = ""
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)  # PNGs and GPS positions
     revision: str = field(default_factory=lambda: uuid.uuid4().hex)
+    skip_tracks: tuple[str, ...] = ()  # optional views left out of processing, made when first shown
 
     # ------------------------------------------------------------------ processing
     def process(self, progress: Callable[[str], None] | None = None, pool: "LinePool | None" = None) -> None:
         out = None
         if pool is not None:
             try:
-                out = pool.run(self.raw, self.options, self.line_id, progress)
+                out = pool.run(self.raw, self.options, self.line_id, progress, self.skip_tracks)
             except BrokenProcessPool:  # a worker died (e.g. out of memory): do this line here instead
                 out = None
-        res, zones, regions = out or process_line(self.raw, self.options, self.line_id, progress)
+        res, zones, regions = out or process_line(self.raw, self.options, self.line_id, progress, self.skip_tracks)
         self.result = res
         off = self.offset_m
         self.zones = [Zone.from_dict({**z, **({"distance_start_m": z["distance_start_m"] + off,
@@ -167,6 +171,20 @@ class LineState:
     def views(self) -> list[str]:
         return [v for v in VIEWS if v not in OPTIONAL_VIEWS or getattr(self.result, v) is not None]
 
+    def lazy_views(self) -> list[str]:
+        """Optional views not processed yet; ensure_view() makes one when it is first shown."""
+        return [v for v in OPTIONAL_VIEWS if getattr(self.result, v) is None]
+
+    def ensure_view(self, view: str) -> None:
+        """Process one optional view that was left out. The pipeline is deterministic, so the other tracks of
+        a fresh run are identical to the ones kept; only the new track and its log steps are taken from it."""
+        if view not in OPTIONAL_VIEWS or getattr(self.result, view) is not None:
+            return
+        extra = run_pipeline(self.raw, self.options, tracks={"analysis", view})
+        known = {s.step for s in self.result.log}
+        self.result = dc_replace(self.result, **{view: getattr(extra, view)},
+                               log=list(self.result.log) + [s for s in extra.log if s.step not in known])
+
     def positions(self) -> tuple[np.ndarray, np.ndarray] | None:
         """(lat, lon) per trace from the .cor GPS, or None."""
         if "positions" not in self._cache:
@@ -200,6 +218,7 @@ class LineState:
         return out
 
     def png(self, view: str) -> bytes:
+        self.ensure_view(view)
         if view not in self.views():
             raise KeyError(view)
         if view not in self._cache:
@@ -235,7 +254,7 @@ class LineState:
         return {
             "line_id": self.line_id, "revision": self.revision, "source_file": self.source_file, "channel": self.channel,
             "n_traces": a.n_traces, "n_samples": a.n_samples, "dt_ns": a.dt_ns, "dx_m": a.dx_m,
-            "time_window_ns": a.n_samples * a.dt_ns, "views": self.views(),
+            "time_window_ns": a.n_samples * a.dt_ns, "views": self.views(), "lazy_views": self.lazy_views(),
             "trace_offset": self.trace_offset, "crop": self.raw.metadata.get("crop"),
             "ids_ballast": self.raw.metadata.get("ids_ballast"),
             "km_from": self.km(0), "km_to": self.km(a.n_traces - 1),
@@ -255,9 +274,11 @@ class LineState:
 
 
 def process_line(raw: Radargram, options: ProcessingOptions, line_id: str,
-                 progress: Callable[[str], None] | None = None) -> tuple[ProcessingResult, list[dict], list[dict]]:
-    """Processing tracks and automatic zones of one line. Module level so a worker process can run it."""
-    res = run_pipeline(raw, options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay", "layers"})
+                 progress: Callable[[str], None] | None = None,
+                 skip: tuple[str, ...] = ()) -> tuple[ProcessingResult, list[dict], list[dict]]:
+    """Processing tracks and automatic zones of one line. Module level so a worker process can run it.
+    skip: optional views (OPTIONAL_VIEWS) to leave out; they never change the analysis track or the zones."""
+    res = run_pipeline(raw, options, progress=progress, tracks=set(LINE_TRACKS - set(skip)))
     if progress:
         progress("detect")
     det = analyze_line(res.analysis, velocity_m_per_ns=res.velocity_m_per_ns,
@@ -267,8 +288,8 @@ def process_line(raw: Radargram, options: ProcessingOptions, line_id: str,
 
 
 def _process_line_in_worker(raw: Radargram, options: ProcessingOptions, line_id: str,
-                            steps: Any) -> tuple[ProcessingResult, list[dict], list[dict]]:
-    return process_line(raw, options, line_id, steps.put)
+                            steps: Any, skip: tuple[str, ...] = ()) -> tuple[ProcessingResult, list[dict], list[dict]]:
+    return process_line(raw, options, line_id, steps.put, skip)
 
 
 def line_workers(n_lines: int) -> int:
@@ -286,9 +307,10 @@ class LinePool:
         self._pool = ProcessPoolExecutor(workers, mp_context=ctx)
 
     def run(self, raw: Radargram, options: ProcessingOptions, line_id: str,
-            progress: Callable[[str], None] | None) -> tuple[ProcessingResult, list[dict], list[dict]]:
+            progress: Callable[[str], None] | None,
+            skip: tuple[str, ...] = ()) -> tuple[ProcessingResult, list[dict], list[dict]]:
         steps = self._manager.Queue()
-        fut = self._pool.submit(_process_line_in_worker, raw, options, line_id, steps)
+        fut = self._pool.submit(_process_line_in_worker, raw, options, line_id, steps, skip)
         while True:
             try:
                 step = steps.get(timeout=0.2)
@@ -372,6 +394,8 @@ class Job:
     structures_kml: str = ""  # bridges/culverts KML that sets the GPS lag of each IDS zone ("" = no correction)
     plan: list[dict[str, Any]] = field(default_factory=list)
     screen_reviews: dict[str, dict[str, Any]] = field(default_factory=dict)  # "line/item" -> decision (triage.py)
+    # review workspace chosen before processing: {"layout": str, "panels": {panel: "now" | "open" | "off"}}
+    workspace: dict[str, Any] = field(default_factory=dict)
     progress: dict[str, Any] = field(default_factory=lambda: {"state": "done"})
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _thread: threading.Thread | None = field(default=None, repr=False)
@@ -522,7 +546,7 @@ class Job:
             if chain:
                 rg.metadata.update(chainage=chain, sections=", ".join(e.get("sections", [])))
             ln = LineState(line_id=line_id, source_file=primary.name, channel=ch + 1 if len(rgs) > 1 else None,
-                           raw=rg, companions=comps, trace_offset=offset)
+                           raw=rg, companions=comps, trace_offset=offset, skip_tracks=self.skip_tracks())
             saved = self._pending_lines.get(line_id)
             if saved and saved.get("source_file") == ln.source_file:
                 ln.options = parse_options(saved.get("options"))
@@ -641,7 +665,7 @@ class Job:
                        companions=d["companions"], options=d["options"], result=d["result"],
                        zones=[Zone.from_dict(z) for z in d["zones"]], auto_zones=d["auto_zones"],
                        artifact_regions=[ArtifactRegion(**a) for a in d["artifact_regions"]],
-                       trace_offset=d["trace_offset"])
+                       trace_offset=d["trace_offset"], skip_tracks=self.skip_tracks())
         return ln
 
     def progress_json(self) -> dict[str, Any]:
@@ -956,6 +980,7 @@ class Job:
                        "status": ln.status, "status_note": ln.status_note} for ln in self.lines],
             "pending_lines": self._pending_lines,
             "screen_reviews": self.screen_reviews,
+            "workspace": self.workspace,
             "comparison": self.comparison,
             # read by the job list and the all-jobs comparison export without reprocessing
             "summary": {"n_lines": len(self.lines), "files": sorted({ln.source_file for ln in self.lines}),
@@ -984,6 +1009,7 @@ class Job:
         job.comparison = cmp.upgrade_state(st.get("comparison") or cmp.new_state())
         job.source_folder = st.get("source_folder", "")
         job.screen_reviews = st.get("screen_reviews", {})
+        job.workspace = st.get("workspace", {})
         job.ids_ballast_dir = st.get("ids_ballast_dir", "")
         job.structures_kml = st.get("structures_kml", "")
         if "plan" not in st:  # version 1: no plan or checkpoints yet
@@ -1280,6 +1306,7 @@ class Job:
             "job_id": self.job_id, "created": self.created, "info": asdict(self.info), "lang": self.lang,
             "source_folder": self.source_folder, "progress": self.progress_json(),
             "reviewer": self.reviewer, "problems": self.problems, "unassigned": self.unassigned,
+            "workspace": self.workspace,
             "review": review_counts(zones),
             "draft": bool(self.draft_reasons()), "draft_reasons": self.draft_reason_texts(),
             "snapshots": self.snapshots(),
@@ -1453,6 +1480,26 @@ class Job:
             raise KeyError(name)
         path.write_text(text, encoding="utf-8", newline="")  # text already has \r\n line ends
         return path
+
+    def skip_tracks(self) -> tuple[str, ...]:
+        """Optional views the workspace does not want made during processing (see set_workspace)."""
+        panels = self.workspace.get("panels", {})
+        return tuple(v for v in OPTIONAL_VIEWS if panels.get(v, "now") != "now")
+
+    def set_workspace(self, d: dict[str, Any]) -> None:
+        """Layout and panel choices of the review workspace. Panels: "now" = made while processing and open,
+        "open" = made when first opened, "off" = not offered. Only the optional views change processing."""
+        if not isinstance(d, dict):
+            raise ValueError("workspace must be an object")
+        panels = d.get("panels", {})
+        if not isinstance(panels, dict) or any(v not in WORKSPACE_STATES for v in panels.values()):
+            raise ValueError(f"panel states must be one of {WORKSPACE_STATES}")
+        self.workspace = {"layout": str(d.get("layout", ""))[:40], "panels": {str(k)[:40]: v for k, v in panels.items()},
+                          "open": [str(x)[:40] for x in d.get("open", [])][:40] if isinstance(d.get("open"), list) else []}
+        skip = self.skip_tracks()
+        for ln in self.lines:
+            ln.skip_tracks = skip
+        self.save()
 
     def set_info(self, d: dict[str, Any]) -> None:
         known = {f.name for f in fields(SurveyInfo)}
