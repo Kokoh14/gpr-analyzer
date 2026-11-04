@@ -371,7 +371,8 @@ def artifact_warnings(z: Zone, ctx: Context) -> list[Evidence]:
                          f"zone reaches the bottom noise ({a.id}, from {a.time_start_ns:.0f} ns)"))
         else:
             label_th = {"vertical_stripe": "แถบแนวตั้ง", "dead_trace": "trace ไม่มีสัญญาณ",
-                        "clipped_trace": "trace อิ่มตัว", "stationary_traces": "trace หยุดเดิน"}[a.kind]
+                        "clipped_trace": "trace อิ่มตัว", "stationary_traces": "trace หยุดเดิน",
+                        "surface_change": "ผิวด้านบนเปลี่ยน (จุดตัด/สะพาน)"}[a.kind]
             out.append(E("warning", f"near_{a.kind}",
                          f"{label_th} trace {a.trace_start}–{a.trace_end} น่าจะเป็น artifact ({a.id})",
                          f"{a.kind.replace('_', ' ')} at traces {a.trace_start}–{a.trace_end}, "

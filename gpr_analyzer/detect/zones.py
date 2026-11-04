@@ -16,7 +16,7 @@ from gpr_analyzer.core import Radargram, depth_from_time
 from gpr_analyzer.detect._signal import contrast_section
 from gpr_analyzer.detect.models import ArtifactFlag, Hyperbola, Zone
 
-MASKED_ARTIFACTS = ("vertical_stripe", "dead_trace", "clipped_trace")
+MASKED_ARTIFACTS = ("vertical_stripe", "dead_trace", "clipped_trace", "surface_change")
 
 
 @dataclass

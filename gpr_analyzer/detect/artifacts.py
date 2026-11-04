@@ -7,6 +7,11 @@
   ringing (or another flat event) on most traces. It looks like a row of small bright spots.
 * bottom_noise: the incoherent tail of the record where a gain has amplified noise; red there
   in an energy view is gain, not a target.
+* surface_change: a run of traces, several metres long, where the first nanoseconds (direct wave and
+  surface reflection) are much stronger than along the rest of the line once the background is
+  removed: a level crossing, bridge deck, platform or other change of the surface. What is left of
+  the direct wave there rings down through the whole depth and looks like scattering or a void.
+  Seen on railway lines (IDS, 0.36 m traces); a narrow one is a vertical_stripe instead.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.ndimage import uniform_filter1d
+from scipy.ndimage import median_filter, uniform_filter1d
 
 from gpr_analyzer.core import Radargram
 from gpr_analyzer.detect._signal import (
@@ -47,11 +52,19 @@ class ArtifactParams:
     ringing_contrast: float = 4.0
     ringing_max_periods: float = 3.0  # thicker bands of specks are crossing events, not ringing
     ringing_factor: float = 2.0  # inside a band, contrast counts from this × the row's 90th percentile up
+    surface_window_ns: float = 10.0  # the top of the processed record compared trace by trace
+    surface_db: float = 6.0  # above the running median of that energy
+    surface_baseline_m: float = 100.0  # running-median length
+    surface_min_m: float = 5.0  # shorter runs are left to the vertical-stripe check
+    surface_gap_m: float = 3.5  # runs closer than this are one change
+    surface_pad_m: float = 3.5  # the ring-down reaches a little past the run
+    surface_deep_windows: int = 5  # the record below the top window, in equal parts
+    surface_deep_db: float = 3.0  # the ring-down: this much above the line in all but one deep part
 
 
 def _flag(kind, n, a, b, t0, t1, th, en, strength=0.0) -> ArtifactFlag:
     prefix = {"vertical_stripe": "VS", "dead_trace": "DT", "clipped_trace": "CT",
-              "stationary_traces": "ST", "bottom_noise": "BN", "ringing": "RB"}[kind]
+              "stationary_traces": "ST", "bottom_noise": "BN", "ringing": "RB", "surface_change": "SC"}[kind]
     return ArtifactFlag(f"{prefix}{n}", kind, int(a), int(b), float(t0), float(t1), th, en, float(strength))
 
 
@@ -257,7 +270,48 @@ def suppress_ringing(c: np.ndarray, flags: list[ArtifactFlag], dt_ns: float,
     return out
 
 
+def detect_surface_changes(r: Radargram, params: ArtifactParams | None = None) -> list[ArtifactFlag]:
+    """Runs of traces whose top window is much stronger than the line around them (see module doc)."""
+    p = params or ArtifactParams()
+    n_s, n_t = r.data.shape
+    if not r.dx_m or n_t < 3 * p.surface_min_m / r.dx_m:
+        return []
+    m = lambda metres: max(1, int(round(metres / r.dx_m)))  # noqa: E731
+    top = max(2, min(n_s, int(p.surface_window_ns / r.dt_ns)))
+    e = 10 * np.log10(np.mean(r.data[:top].astype(np.float64) ** 2, axis=0) + 1e-12)
+    base = median_filter(e, size=min(m(p.surface_baseline_m), n_t), mode="nearest")
+    excess = uniform_filter1d(e - base, 5)
+    # a shallow target is strong only near the top; a surface change rings down the whole record
+    edges = np.linspace(top, n_s, p.surface_deep_windows + 1).astype(int)
+    deep = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        w = 10 * np.log10(np.mean(r.data[lo:hi].astype(np.float64) ** 2, axis=0) + 1e-12)
+        deep.append(w - median_filter(w, size=min(m(p.surface_baseline_m), n_t), mode="nearest"))
+    deep = np.array(deep)
+    spans: list[list[int]] = []
+    for a, b in runs(excess > p.surface_db, max_gap=m(p.surface_gap_m)):
+        if b - a + 1 < m(p.surface_min_m):
+            continue
+        if np.sum(np.median(deep[:, a:b + 1], axis=1) >= p.surface_deep_db) < p.surface_deep_windows - 1:
+            continue
+        a, b = max(0, a - m(p.surface_pad_m)), min(n_t - 1, b + m(p.surface_pad_m))
+        if spans and a <= spans[-1][1] + 1:
+            spans[-1][1] = b
+        else:
+            spans.append([a, b])
+    out = []
+    for n, (a, b) in enumerate(spans, start=1):
+        out.append(_flag("surface_change", n, a, b, 0.0, n_s * r.dt_ns,
+                         f"ผิวด้านบนเปลี่ยนช่วง {(b - a + 1) * r.dx_m:.0f} m (สัญญาณช่วงแรกแรงกว่ารอบข้าง "
+                         f"{excess[a:b + 1].max():.0f} dB) เช่น จุดตัดถนน สะพาน ชานชาลา: คลื่นสะท้อนค้างทั้งความลึก",
+                         f"surface change over {(b - a + 1) * r.dx_m:.0f} m (top signal {excess[a:b + 1].max():.0f} dB "
+                         "above the line), e.g. a level crossing, bridge or platform: its ring-down fills the depth",
+                         float(excess[a:b + 1].max())))
+    return out
+
+
 def detect_artifacts(r: Radargram, params: ArtifactParams | None = None, *,
                      env: np.ndarray | None = None, period: int | None = None) -> list[ArtifactFlag]:
     p = params or ArtifactParams()
-    return detect_vertical_stripes(r, p) + detect_abnormal_traces(r, p) + detect_bottom_noise(r, p, env=env, period=period)
+    return (detect_vertical_stripes(r, p) + detect_abnormal_traces(r, p) + detect_surface_changes(r, p)
+            + detect_bottom_noise(r, p, env=env, period=period))

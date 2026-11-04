@@ -12,7 +12,7 @@ const TYPE = {
 const CONF = { high: "สูง", medium: "ปานกลาง", low: "ต่ำ", confirmed: "ยืนยันแล้ว" };
 const ACT = { E: "E ฉุกเฉิน", 1: "1 เร่งด่วน", 2: "2 ตรวจสอบเพิ่ม", 3: "3 เฝ้าระวัง", none: "ไม่ต้องดำเนินการ" };
 const REV = { auto: "ยังไม่ตรวจ", accepted: "ยอมรับแล้ว", edited: "แก้ไขแล้ว", rejected: "ปฏิเสธ" };
-const ART = { vertical_stripe: "แถบแนวตั้ง", bottom_noise: "noise ก้นภาพ", ringing: "ringing แนวนอน", abnormal_trace: "trace ผิดปกติ", dead_trace: "trace ว่าง", stationary: "หยุดเดิน" };
+const ART = { surface_change: "ผิวเปลี่ยน (จุดตัด/สะพาน)", vertical_stripe: "แถบแนวตั้ง", bottom_noise: "noise ก้นภาพ", ringing: "ringing แนวนอน", abnormal_trace: "trace ผิดปกติ", dead_trace: "trace ว่าง", stationary: "หยุดเดิน" };
 const STEP = { center_frequency: "ความถี่กลาง", dewow: "Dewow", time_zero: "Time-zero", bandpass: "Bandpass", background_removal: "Background removal",
   gain: "Gain (SEC)", velocity: "ความเร็วคลื่น", migration: "Migration", envelope: "Envelope / energy", agc_display: "AGC (แสดงผล)",
   display_qc: "ตรวจ trace (แสดงผล)", display_bandpass: "Bandpass อัตโนมัติ (แสดงผล)", display_background: "ลบพื้นหลังอัตโนมัติ (แสดงผล)",
@@ -22,6 +22,7 @@ const VIEWS = [
   ["high_gain", "Gain สูง (AGC ใช้ดูเท่านั้น)", "สี = ขั้วสัญญาณ แอมพลิจูดเทียบกันข้ามภาพไม่ได้"],
   ["envelope", "พลังงานสะท้อน (Hilbert envelope)", "สีแดง = สะท้อนแรง ไม่ได้แปลว่าเป็นโพรง"],
   ["viewpoint", "แบบหน้าจอ ViewPoint (ImpulseRadar)", "เลียนแบบภาพของ ViewPoint ใช้เทียบกับโปรแกรมของเครื่อง ใช้ดูเท่านั้น"],
+  ["layers", "ชั้นแนวราบ (ไม่ลบพื้นหลัง)", "เห็นชั้นที่ราบยาว เช่น ใต้หินโรยทาง ซึ่งการลบพื้นหลังจะลบออก แถบดำขาวด้านบนคือคลื่นตรงจากสายอากาศ"],
   ["autodisplay", "ฟิลเตอร์อัตโนมัติ (ใช้ดูเท่านั้น)", "โปรแกรมเลือก bandpass, ลบพื้นหลัง, gain และ contrast จากข้อมูลเส้นนี้เอง ดูค่าที่เลือกในตารางขั้นตอนประมวลผล gain เท่ากันทุก trace จึงเทียบความแรงตามแนวยาวได้"],
 ];
 const FAMILY = { iprh: "header", iprb: "data", rad: "header", rd3: "data", rd7: "data", hd: "header", dt1: "data", dzt: "data", sgy: "data", segy: "data", dt: "data" };
