@@ -203,6 +203,8 @@ STRINGS: dict[str, dict[str, str]] = {
     "art_clipped_trace": {"th": "trace สัญญาณล้น (clipped)", "en": "clipped trace"},
     "art_stationary_traces": {"th": "เครื่องหยุดอยู่กับที่", "en": "stationary traces (operator stopped)"},
     "art_excluded_by_reviewer": {"th": "ช่วงที่ผู้ตรวจทานไม่ใช้ผล", "en": "section excluded by the reviewer"},
+    "art_surface_change": {"th": "ผิวด้านบนเปลี่ยน (จุดตัดถนน/สะพาน/ชานชาลา)",
+                           "en": "surface change (level crossing / bridge / platform)"},
     "art_bottom_noise": {"th": "noise ใต้ระดับสัญญาณจริง", "en": "noise below the last coherent signal"},
     # --- limitations
     "lim_velocity": {"th": "ความลึกทั้งหมดคำนวณจากความเร็วคลื่น {v} ม./ns ({src}) ถ้าความเร็วจริงต่างไป ±{dv} ม./ns โซนที่ลึก {d} ม. จะคลาดได้ประมาณ ±{dd} ม.",

@@ -70,3 +70,33 @@ def test_artifact_flags_have_ids_and_bilingual_reason():
 def test_tall_wide_target_edges_are_not_stripes():
     r = base().void(100, 160, 20, 85, amp=3.0, multiples=6).radargram()
     assert detect_vertical_stripes(r) == []
+
+
+def railway_line():
+    """0.36 m traces like the IDS railway survey; a 14 m crossing whose direct wave rings down the record."""
+    ln = Line(n_traces=600, dx_m=0.36).direct_wave().layer(30, amp=1.0).noise(0.05).stripe(100, 102)
+    for x in range(300, 340):
+        for k in range(12):
+            ln._put(x, 3.0 + 7.0 * k, 30.0 * 0.8 ** k * (-1) ** k)
+    return ln.radargram()
+
+
+def test_surface_change_is_flagged_and_masked():
+    from gpr_analyzer.detect import analyze_line
+    from gpr_analyzer.detect.artifacts import detect_surface_changes
+
+    r = railway_line()
+    (f,) = detect_surface_changes(r)
+    assert f.kind == "surface_change" and f.id == "SC1"
+    assert 285 <= f.trace_start <= 300 and 339 <= f.trace_end <= 355  # the narrow stripe at 100 is not one
+    det = analyze_line(r)
+    assert any(a.kind == "surface_change" for a in det.artifacts)
+    assert not [z for z in det.zones if f.trace_start <= (z.trace_start + z.trace_end) / 2 <= f.trace_end]
+
+
+def test_no_surface_change_without_trace_spacing():
+    from gpr_analyzer.detect.artifacts import detect_surface_changes
+
+    r = railway_line()
+    r.dx_m = None
+    assert detect_surface_changes(r) == []

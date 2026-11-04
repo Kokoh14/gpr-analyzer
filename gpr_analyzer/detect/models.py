@@ -83,7 +83,7 @@ class Evidence:
 @dataclass
 class ArtifactFlag:
     id: str
-    kind: str  # vertical_stripe | dead_trace | clipped_trace | stationary_traces | bottom_noise
+    kind: str  # vertical_stripe | dead_trace | clipped_trace | stationary_traces | bottom_noise | surface_change
     trace_start: int
     trace_end: int
     time_start_ns: float

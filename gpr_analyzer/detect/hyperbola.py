@@ -130,7 +130,7 @@ def find_hyperbolas(r: Radargram, params: HyperbolaParams | None = None,
     peaks[:top] = False
     skip = np.zeros(n_t, dtype=bool)
     for a in artifacts or []:
-        if a.kind in ("vertical_stripe", "dead_trace", "clipped_trace"):
+        if a.kind in ("vertical_stripe", "dead_trace", "clipped_trace", "surface_change"):
             skip[a.trace_start:a.trace_end + 1] = True
             peaks[:, a.trace_start:a.trace_end + 1] = False
         elif a.kind == "bottom_noise":

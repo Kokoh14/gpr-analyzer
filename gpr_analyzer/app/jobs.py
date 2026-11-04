@@ -48,7 +48,8 @@ from gpr_analyzer.report.schema import (ACTION_LEVELS, CONFIDENCE_LEVELS, SURFAC
                                         Evidence, LineResult, ProcessingStep, SurveyInfo, SurveyResult, Zone)
 
 APP_VERSION = "0.1"
-VIEWS = ("grey", "high_gain", "envelope", "viewpoint", "autodisplay")
+VIEWS = ("grey", "high_gain", "envelope", "viewpoint", "autodisplay", "layers")
+OPTIONAL_VIEWS = ("viewpoint", "autodisplay", "layers")  # tracks an old checkpoint may not have
 EDITABLE = ("trace_start", "trace_end", "time_top_ns", "time_bottom_ns", "suspected_type", "confidence", "action",
             "note")
 # All processing fields must survive imported workflows and checkpoints.
@@ -164,7 +165,7 @@ class LineState:
 
     # ------------------------------------------------------------------ images
     def views(self) -> list[str]:
-        return [v for v in VIEWS if v not in ("viewpoint", "autodisplay") or getattr(self.result, v) is not None]
+        return [v for v in VIEWS if v not in OPTIONAL_VIEWS or getattr(self.result, v) is not None]
 
     def positions(self) -> tuple[np.ndarray, np.ndarray] | None:
         """(lat, lon) per trace from the .cor GPS, or None."""
@@ -256,7 +257,7 @@ class LineState:
 def process_line(raw: Radargram, options: ProcessingOptions, line_id: str,
                  progress: Callable[[str], None] | None = None) -> tuple[ProcessingResult, list[dict], list[dict]]:
     """Processing tracks and automatic zones of one line. Module level so a worker process can run it."""
-    res = run_pipeline(raw, options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay"})
+    res = run_pipeline(raw, options, progress=progress, tracks={"analysis", "envelope", "display", "viewpoint", "autodisplay", "layers"})
     if progress:
         progress("detect")
     det = analyze_line(res.analysis, velocity_m_per_ns=res.velocity_m_per_ns,
@@ -333,6 +334,10 @@ def render_png(res: ProcessingResult, view: str) -> bytes:
     elif view == "autodisplay":
         d = res.autodisplay.data
         c = res.autodisplay.metadata["display_clip"]
+        img, cmap, lo, hi = d, "gray", -c, c
+    elif view == "layers":
+        d = res.layers.data
+        c = float(np.percentile(np.abs(d[d.shape[0] // 8:]), 99.0)) or 1.0  # below the direct wave
         img, cmap, lo, hi = d, "gray", -c, c
     elif view == "high_gain":
         d = res.display.data
@@ -572,7 +577,7 @@ class Job:
         d = self.checkpoint_path(ln.line_id)
         d.parent.mkdir(exist_ok=True)
         res = ln.result
-        slim = ProcessingResult(**{**{f.name: getattr(res, f.name) for f in fields(res)}, "layers": None, "energy": None,
+        slim = ProcessingResult(**{**{f.name: getattr(res, f.name) for f in fields(res)}, "energy": None,
                                    "log": list(res.log)})
         rec = {"version": CHECKPOINT_VERSION, "app_version": APP_VERSION, "processing_revision": PROCESSING_REVISION, "source": e["primary"],
                "source_stamp": _stamp(Path(e["primary"])), "range_m": e["range_m"],
@@ -1426,7 +1431,7 @@ def line_summary_rows(job_id: str, project: str, comp: dict[str, Any]) -> list[d
 
 LINE_STATUS = ("pending", "approved", "redo")
 CHECKPOINT_VERSION = 1
-PROCESSING_REVISION = 2  # depth/reference semantics; independent of UI or package releases
+PROCESSING_REVISION = 3  # 3: surface-change artifacts + layers track; independent of UI or package releases
 
 
 def _iou(a: Zone, b: Zone) -> float:
