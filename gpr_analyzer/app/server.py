@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from gpr_analyzer.app import chainage, folders, geo, kml, scene3d, volume3d
+from gpr_analyzer.app import chainage, folders, geo, kml, scene3d, triage, volume3d
 from gpr_analyzer.app.files import safe_name
 from gpr_analyzer.app.compare import TEMPLATE_CSV
 from gpr_analyzer.app.jobs import IMAGE_TYPES, VIEWS, Job, JobStore
@@ -252,6 +252,19 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
         j = job(job_id)
         with j.lock:
             return geo.dielectric_points(j.lines)
+
+    @app.get("/api/jobs/{job_id}/queue.json")
+    def review_queue(job_id: str) -> dict:
+        j = job(job_id)
+        with j.lock:
+            return triage.build_queue(j)
+
+    @app.post("/api/jobs/{job_id}/lines/{line_id}/screen/{item_id}")
+    def screen_review(job_id: str, line_id: str, item_id: str, body: dict = Body(...)) -> dict:
+        j = job(job_id)
+        with j.lock:
+            guarded(j.screen_review, line_id, item_id, body.get("decision", ""), body.get("note", ""), body.get("item"))
+            return triage.build_queue(j)
 
     @app.post("/api/jobs/{job_id}/lines/{line_id}/zones/{zone_id}/review")
     def review(job_id: str, line_id: str, zone_id: str, body: dict = Body(...)) -> dict:

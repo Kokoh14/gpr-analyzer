@@ -69,6 +69,35 @@ comparison data). The start page lists earlier jobs; opening one re-reads its up
 saved options and puts the zones and reviews back. Reprocessing a line clears its reviews (they stay in the
 labels file).
 
+## Confirm mode (โหมดตรวจยืนยัน)
+
+Button **โหมดตรวจยืนยัน** in the top bar. One screen for checking a whole job place by place, laid out for long
+review sessions: the queue on the left, one large radargram in the middle with the map under it, the decision on
+the right. The queue comes from `/api/jobs/<id>/queue.json` (`app/triage.py`) and covers every line of the job:
+
+- **zones** from the detector (not artifacts, not in excluded sections), ordered by action level (E, 1, 2, 3),
+  then confidence; layers after the other zones;
+- **target screen "ความชื้นสูง"**: stretches where the energy at 0.6–1.8 m divided by the energy at 0.15–0.6 m is at
+  least 3 dB (and 2 × MAD) below the line's own median over at least 3 m (wet or clayey ground, fouled ballast).
+  Relative to the same line, so it needs no calibration per instrument. Medium confidence from 6 dB over 10 m;
+- **random audit**: 10 % of the windows where nothing was found (10 m windows, shorter on short lines, at most 5
+  per line, the same picks every time), so the reviewer also checks what the program calls normal.
+
+Filter chips choose the target (โพรง / ช่องอากาศ, ความชื้นสูง, ท่อ / วัตถุ, ดินหลวม / ถูกรบกวน = scattered,
+ชั้นดิน, สุ่มตรวจ) and **ฟิลเตอร์แสดงผล** picks the view: automatic = high gain for voids and pipes, envelope for
+moisture, automatic display filters for loose ground and audits. Contrast and brightness sliders change the
+picture only.
+
+Opening an item switches line if needed, zooms to the item with some ground around it (⤢ กว้างขึ้น for more) and
+centres the map on it. Every item with GPS is a dot on the map (filled = still to check); click a dot to go there.
+
+Decisions: **1** ยืนยันผิดปกติ, **2** ไม่ผิดปกติ, **3** แก้ไขกรอบ / วาดโซน (drag a box), **4** ภาพใช้ไม่ได้, then
+**Enter** saves and opens the next item still to check; ← → move without deciding. For zones these are the normal
+review actions (accept, reject with the note "ไม่ผิดปกติ" or "ภาพใช้ไม่ได้", edit with the new box), so the report
+rules do not change. Screen and audit items are not zones: their decisions are kept in `state.json`
+(`screen_reviews`) and `labels.jsonl` (action `screen`); a box drawn on one of them becomes a reviewer zone with a
+note and goes through the normal review.
+
 ## Before the report
 
 - **Sections not used**: drag on a radargram (✂) to mark a distance range whose results are not used (bad data,

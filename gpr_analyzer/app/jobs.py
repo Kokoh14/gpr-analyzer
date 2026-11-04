@@ -30,7 +30,7 @@ from weakref import WeakValueDictionary
 import numpy as np
 
 from gpr_analyzer.app import compare as cmp
-from gpr_analyzer.app import geo, gps_lag, kml
+from gpr_analyzer.app import geo, gps_lag, kml, triage
 from gpr_analyzer.app.chainage import fmt_km, km_at_trace
 from gpr_analyzer.app.files import InputGroup, preview_text, safe_name, sort_files
 from gpr_analyzer.core import Radargram, crop_metadata, crop_to_range
@@ -371,6 +371,7 @@ class Job:
     ids_ballast_dir: str = ""  # folder of IDS automatic ballast CSVs shown under IDS lines ("" = none)
     structures_kml: str = ""  # bridges/culverts KML that sets the GPS lag of each IDS zone ("" = no correction)
     plan: list[dict[str, Any]] = field(default_factory=list)
+    screen_reviews: dict[str, dict[str, Any]] = field(default_factory=dict)  # "line/item" -> decision (triage.py)
     progress: dict[str, Any] = field(default_factory=lambda: {"state": "done"})
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _thread: threading.Thread | None = field(default=None, repr=False)
@@ -685,6 +686,32 @@ class Job:
         self._label(action, ln, zone_id, before, new.to_dict())
         return new
 
+    def screen_review(self, line_id: str, item_id: str, decision: str, note: str = "",
+                      item: dict[str, Any] | None = None) -> None:
+        """Decision on a screen / audit item of the confirm queue (triage.py). Not a zone; logged as a label."""
+        if decision not in triage.DECISIONS:
+            raise ValueError(f"unknown decision {decision!r}")
+        ln = self.line(line_id)
+        key = f"{line_id}/{item_id}"
+        before = self.screen_reviews.get(key)
+        if decision == "reset":
+            self.screen_reviews.pop(key, None)
+            after = None
+        else:
+            after = {"decision": decision, "note": str(note or ""), "time": _now(), "reviewer": self.reviewer,
+                     "item": {k: (item or {}).get(k) for k in ("kind", "target", "trace_start", "trace_end",
+                                                               "time_top_ns", "time_bottom_ns", "drop_db")}}
+            self.screen_reviews[key] = after
+        res = ln.result
+        rec = {"time": _now(), "app_version": APP_VERSION, "job_id": self.job_id, "reviewer": self.reviewer,
+               "action": "screen", "line_id": line_id, "source_file": ln.source_file, "item_id": item_id,
+               "before": before, "after": after,
+               "processing": {"options": options_dict(ln.options), "velocity_m_per_ns": res.velocity_m_per_ns,
+                              "velocity_source": res.velocity_source_code}}
+        with self.labels_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+        self.save()
+
     def add_zone(self, line_id: str, values: dict[str, Any]) -> Zone:
         """Zone drawn by the reviewer (something the detector missed)."""
         ln = self.line(line_id)
@@ -928,6 +955,7 @@ class Job:
                        "zones": [z.to_dict() for z in ln.zones], "auto_zones": ln.auto_zones, "sections": ln.sections,
                        "status": ln.status, "status_note": ln.status_note} for ln in self.lines],
             "pending_lines": self._pending_lines,
+            "screen_reviews": self.screen_reviews,
             "comparison": self.comparison,
             # read by the job list and the all-jobs comparison export without reprocessing
             "summary": {"n_lines": len(self.lines), "files": sorted({ln.source_file for ln in self.lines}),
@@ -955,6 +983,7 @@ class Job:
         job.lang, job.reviewer = st.get("lang", "bi"), st.get("reviewer", "")
         job.comparison = cmp.upgrade_state(st.get("comparison") or cmp.new_state())
         job.source_folder = st.get("source_folder", "")
+        job.screen_reviews = st.get("screen_reviews", {})
         job.ids_ballast_dir = st.get("ids_ballast_dir", "")
         job.structures_kml = st.get("structures_kml", "")
         if "plan" not in st:  # version 1: no plan or checkpoints yet
