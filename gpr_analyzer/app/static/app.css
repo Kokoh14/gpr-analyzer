@@ -209,6 +209,8 @@ table.jobs td, table.jobs th { text-align: left; padding: 4px 6px; border-bottom
 .role.warn { color: var(--warn); }
 .scanmap { height: 260px; border-radius: 6px; border: 1px solid var(--line); margin-bottom: 6px; background: #1b2129; }
 .scan-table { max-height: 420px; overflow: auto; }
+.sec-box { margin-top: 12px; border-top: 1px solid var(--line, #ddd); padding-top: 8px; }
+.sec-box h4 { margin: 4px 0; }
 table.scan { width: 100%; border-collapse: collapse; }
 table.scan td, table.scan th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
 table.scan tr.off td { opacity: .5; }
