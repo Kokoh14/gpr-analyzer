@@ -95,6 +95,7 @@ async function runUpload() {
   if (S.scan && selectedLines().length) return runFolder();
   const fd = new FormData();
   S.files.forEach((f) => fd.append("files", f, f.name));
+  if (window.W?.choice) fd.append("workspace", JSON.stringify(W.choice));
   busy(true, `กำลังส่ง ${S.files.length} ไฟล์เข้าโปรแกรม…`);
   try {
     const job = await api("/api/jobs", { method: "POST", body: fd });
@@ -251,7 +252,7 @@ async function runFolder() {
     keep("lastStructKml", structKml);
     S.job = await post("/api/jobs/from-folder", { path: S.scan.path, recursive: S.scan.recursive, include: sel.map((l) => l.primary), ranges, info,
       ...(secs ? { sections: secs } : {}), ...(idsCsv ? { ids_ballast_dir: idsCsv } : {}),
-      ...(structKml ? { structures_kml: structKml } : {}) });
+      ...(structKml ? { structures_kml: structKml } : {}), ...(window.W?.choice ? { workspace: W.choice } : {}) });
     S.job = await post(`/api/jobs/${S.job.job_id}/info`, info);
     openProgress();
   } catch (e) { toast("ผิดพลาด: " + e.message); } finally { busy(false); }
@@ -388,6 +389,11 @@ function renderLines() {
 }
 
 function fmt(v, d = 2) { return v == null ? "–" : Number(v).toFixed(d); }
+// views a line offers: processed ones, plus optional ones made when first shown, minus those the workspace turned off
+function lineViews(l) {
+  const have = [...(l.views || ["grey", "high_gain", "envelope"]), ...(l.lazy_views || [])];
+  return have.filter((v) => !window.W?.isOff(v));
+}
 function renderLine() {
   const l = line();
   if (!l) { $("#panes").innerHTML = ""; $("#zoneCards").innerHTML = ""; return; }
@@ -397,7 +403,7 @@ function renderLine() {
     ${l.crop ? `· <b>ประมวลผลเฉพาะช่วง ${fmt(l.crop.start_m, 1)}–${fmt(l.crop.end_m, 1)} m</b> (trace ${l.crop.trace_start}–${l.crop.trace_end} จาก ${l.crop.n_traces_file} ของไฟล์; เลข trace บนภาพนับจากต้นช่วง ระยะ m นับจากต้นเส้น)` : ""} · ความเร็ว ${fmt(l.velocity_m_per_ns, 3)} m/ns (${esc(l.velocity_source)})
     ${l.companions.length ? "· ไฟล์ประกอบ: " + l.companions.map((c) => `<span title="${esc(c.text || "")}">${esc(c.name)}</span>`).join(", ") : ""}`;
   const stamp = Date.now();
-  const views = VIEWS.filter(([v]) => (l.views || ["grey", "high_gain", "envelope"]).includes(v));
+  const views = VIEWS.filter(([v]) => lineViews(l).includes(v));
   $("#viewToggles").innerHTML = views.map(([v, title]) => `<label class="toggle small" title="${esc(title)}">
     <input type="checkbox" data-viewtoggle="${v}" ${S.hidden.has(v) ? "" : "checked"}> ${esc(title.split(" (")[0])}</label>`).join("");
   $("#panes").innerHTML = views.filter(([v]) => (C.on ? v === C.viewFor(l) : !S.hidden.has(v))).map(([v, title, note]) => `
@@ -977,7 +983,7 @@ const C = {
   current() { return this.cur && this.items.find((it) => this.key(it) === this.cur); },
   viewFor(l) {
     const it = this.current(), v = this.view === "auto" ? (it ? TVIEW[it.target] : "grey") : this.view;
-    return (l.views || []).includes(v) ? v : "grey";
+    return lineViews(l).includes(v) ? v : "grey";
   },
   render() {
     if (!this.on) return;
@@ -998,7 +1004,7 @@ const C = {
     }).join("") + (list.length > 400 ? `<li class="muted small">… อีก ${list.length - 400} จุด (เลือกตัวกรองให้แคบลง)</li>` : "")
       || `<li class="muted">ไม่มีจุดในตัวกรองนี้</li>`;
     $(`[data-qitem="${CSS.escape(this.cur || "")}"]`)?.scrollIntoView({ block: "nearest" });
-    const views = VIEWS.filter(([v]) => S.job.lines.some((l) => (l.views || []).includes(v)));
+    const views = VIEWS.filter(([v]) => S.job.lines.some((l) => lineViews(l).includes(v)));
     $("#cView").innerHTML = `<option value="auto">อัตโนมัติตามเป้าหมาย</option>` + views.map(([v, t]) => `<option value="${v}">${esc(t.split(" (")[0])}</option>`).join("");
     $("#cView").value = this.view;
     this.renderDecide();
@@ -1569,7 +1575,7 @@ drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
 $("#depthTop").addEventListener("change", readDepthRange);
 $("#depthBottom").addEventListener("change", readDepthRange);
 $("#depthAll").addEventListener("click", () => setDepthRange(null));
-$("#runBtn").addEventListener("click", runUpload);
+$("#runBtn").addEventListener("click", () => (window.W ? W.ask(runUpload) : runUpload()));  // workspace.js: choose panels first
 $("#pickBtn").addEventListener("click", pickFolder);
 $("#scanBtn").addEventListener("click", scanFolder);
 $("#browseBtn").addEventListener("click", () => browse($("#folderPath").value.trim()));

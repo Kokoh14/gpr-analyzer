@@ -69,6 +69,29 @@ comparison data). The start page lists earlier jobs; opening one re-reads its up
 saved options and puts the zones and reviews back. Reprocessing a line clears its reviews (they stay in the
 labels file).
 
+## Workspace (โต๊ะทำงาน, `static/workspace.js`)
+
+The review page is one workspace. An icon rail on the left opens and closes each panel: confirm mode (queue +
+decision 1–4), lines, zone cards, map, the queue strip along the line, the radargram pictures (high gain,
+envelope, flat layers, automatic filters, ViewPoint), 3D, thick slice, comparison, workflow A/B and the processing
+parameters. Every panel has ⤢ (maximise, Esc returns) and ✕ (close). The ผัง menu in the top bar opens a set of
+panels at once: ตรวจจุดเสี่ยง (confirm mode + map + strip), วิเคราะห์ละเอียด, เทียบซอฟต์แวร์, 3D + แผนที่.
+Exports are folded into one ส่งออก ▾ menu.
+
+Before processing starts (เริ่มวิเคราะห์ / เริ่มประมวลผล) a dialog asks for the layout and, per panel, one of
+**ทำเลยและเปิด** (`now`), **ทำเมื่อกดเปิด** (`open`) or **ไม่ใช้** (`off`, not on the rail). Only the three optional
+pictures cost processing time for every line (`viewpoint`, `autodisplay`, `layers`, `jobs.OPTIONAL_VIEWS`): a picture
+not set to `now` is left out of `run_pipeline` and made for one line the first time it is shown
+(`LineState.ensure_view`, also for the 3D ViewPoint track). The analysis track and the zones are the same either way
+(`tests/test_app_workspace.py`). The choice is sent with the job (`workspace` form field / JSON key), kept in
+`state.json`, returned by `GET /api/jobs/<id>`, and updated by `PUT /api/jobs/<id>/workspace` when panels are opened
+or closed, so a reopened job comes back with the same panels. Jobs without a workspace keep every picture.
+
+The queue strip (คิวตรวจตามแนวระยะ) draws every queue item of the current line (`queue.json`) along its length in
+km (risk-point sections) or metres, coloured by level / audit / decided, with the part of the line shown on screen
+outlined. Clicking an item goes to it (in confirm mode it becomes the current item); clicking elsewhere moves the
+pictures there.
+
 ## Confirm mode (โหมดตรวจยืนยัน)
 
 Button **โหมดตรวจยืนยัน** in the top bar. One screen for checking a whole job place by place, laid out for long

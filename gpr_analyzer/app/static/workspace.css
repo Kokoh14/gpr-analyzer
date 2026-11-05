@@ -1,0 +1,105 @@
+/* Review workspace (workspace.js): icon rail, panels that open/close/maximise, layouts, pre-start dialog,
+   queue strip along the line. Loaded after app.css, so equal selectors here win. */
+
+/* export buttons folded into one menu */
+.exp-menu { position: relative; }
+.exp-menu > summary { list-style: none; cursor: pointer; }
+.exp-menu > summary::-webkit-details-marker { display: none; }
+.exp-list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; display: flex; flex-direction: column; gap: 4px;
+  min-width: 230px; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.exp-list .btn { justify-content: flex-start; }
+.ws-layout { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.ws-layout select { width: auto; }
+
+/* layout: rail | (queue) | (lines) | main | (decision) | (zones); closed panels take no room */
+.review.ws { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px 12px 0; }
+.review.ws > .queue { width: 290px; flex: none; }
+.review.ws > .lines { width: 200px; flex: none; }
+.review.ws > .maincol { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.review.ws > .decide { width: 330px; flex: none; }
+.review.ws > .zones { width: 340px; flex: none; }
+.review.ws .ws-closed { display: none !important; }
+/* in confirm mode a panel opened from the rail is shown too */
+.review.ws.confirm > .lines:not(.ws-closed), .review.ws.confirm > .zones:not(.ws-closed),
+.review.ws.confirm #survey3dCard:not(.ws-closed), .review.ws.confirm #thickCard:not(.ws-closed),
+.review.ws.confirm #compare:not(.ws-closed), .review.ws.confirm #features:not(.ws-closed),
+.review.ws.confirm #workflowCard:not(.ws-closed), .review.ws.confirm #recipe:not(.ws-closed) { display: block; }
+
+/* main column: the radargram first, then the panels under it */
+.review.ws .maincol > * { order: 6; }
+.review.ws .maincol > .run-banner, .review.ws #confirmHead, .review.ws .maincol > .line-head { order: 0; }
+.review.ws .maincol > .zoombar, .review.ws .maincol > .hint, .review.ws .maincol > .readout, .review.ws #panes { order: 2; }
+.review.ws #wsTimeline { order: 3; } .review.ws #lineStatus { order: 3; }
+.review.ws #mapCard { order: 4; } .review.ws #survey3dCard { order: 5; } .review.ws #thickCard { order: 5; }
+.review.ws .maincol > .card { margin: 0 0 8px; }
+
+/* icon rail */
+.ws-rail { position: sticky; top: 56px; align-self: flex-start; flex: none; width: 66px; max-height: calc(100vh - 64px); overflow-y: auto;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; background: var(--panel);
+  border: 1px solid var(--line); border-left: 0; border-radius: 0 8px 8px 0; }
+.ws-ri { position: relative; width: 58px; padding: 6px 0 5px; border: 0; border-radius: 7px; background: transparent; color: var(--muted);
+  font: inherit; font-size: 10.5px; line-height: 1.2; cursor: pointer; text-align: center; }
+.ws-ri svg { display: block; width: 20px; height: 20px; margin: 0 auto 2px; fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round; }
+.ws-ri:hover { color: var(--ink); background: var(--bg); }
+.ws-ri.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+.ws-ri.on::before { content: ""; position: absolute; left: -4px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
+.ws-ri:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ws-sep { width: 36px; height: 1px; background: var(--line); margin: 4px 0; }
+
+/* panel controls ⤢ ✕ */
+.ws-ctl { float: right; display: inline-flex; gap: 2px; margin-left: 8px; }
+.ws-cb { border: 1px solid transparent; background: transparent; color: var(--muted); border-radius: 4px; padding: 0 5px; font: inherit;
+  font-size: 13px; line-height: 20px; cursor: pointer; }
+.ws-cb:hover { border-color: var(--line); color: var(--ink); background: var(--bg); }
+.ws-max { position: fixed !important; z-index: 40; top: 60px; left: 78px; right: 12px; bottom: 12px; margin: 0 !important;
+  max-height: none !important; overflow: auto; display: block !important; box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+.ws-max #map { height: calc(100vh - 260px); }
+body.ws-maxed::after { content: ""; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 35; }
+
+/* queue along the line */
+.ws-timeline { padding: 8px 10px; }
+.ws-tl-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
+.ws-tl { position: relative; height: 46px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; overflow: hidden; }
+.ws-mk { position: absolute; top: 6px; height: 18px; min-width: 6px; padding: 0; border: 0; border-radius: 2px; background: var(--c); cursor: pointer; opacity: .9; }
+.ws-mk.wide { top: 25px; height: 5px; opacity: .55; }
+.ws-mk:hover { opacity: 1; outline: 2px solid var(--ink); }
+.ws-mk.cur { outline: 2px solid var(--ink); outline-offset: 1px; }
+.ws-win { position: absolute; top: 2px; bottom: 2px; border: 2px solid var(--ink); border-radius: 3px; pointer-events: none; opacity: .55; }
+.ws-tk { position: absolute; bottom: 2px; transform: translateX(-50%); font-size: 10px; color: var(--muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums; pointer-events: none; }
+.ws-tk:first-child { transform: none; } .ws-tk:nth-child(5) { transform: translateX(-100%); }
+.ws-tl-legend { margin-top: 4px; } .ws-tl-legend span { color: var(--c); }
+
+/* dialog before processing */
+.ws-modal { position: fixed; inset: 0; z-index: 50; background: rgba(10,14,20,.5); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.ws-dialog { background: var(--panel); border-radius: 12px; width: min(1000px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35); overflow: hidden; }
+.ws-dh { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.ws-dh h3 { font-size: 17px; margin: 0; }
+.ws-dbody { display: flex; min-height: 0; flex: 1; overflow: hidden; }
+.ws-layouts { width: 240px; flex: none; padding: 12px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.ws-sec { font-size: 12px; font-weight: 600; color: var(--muted); }
+.ws-lay { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; border: 1.5px solid var(--line);
+  border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+.ws-lay.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.ws-rows { flex: 1; overflow: auto; padding: 4px 12px 12px; min-width: 0; }
+.ws-tab { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ws-tab th { position: sticky; top: 0; background: var(--panel); font-size: 12px; color: var(--muted); font-weight: 600; padding: 8px 6px; text-align: center; }
+.ws-tab th:first-child { text-align: left; }
+.ws-tab td { border-top: 1px solid var(--line); padding: 6px; text-align: center; }
+.ws-tab td:first-child { text-align: left; }
+.ws-tab td span.small { display: block; }
+.ws-tab input[type=radio] { width: auto; accent-color: var(--accent); transform: scale(1.15); cursor: pointer; }
+.ws-fixed { color: var(--muted); }
+.ws-df { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 16px; border-top: 1px solid var(--line); }
+
+@media (max-width: 1100px) {
+  .review.ws { flex-wrap: wrap; padding: 8px; }
+  .review.ws > .ws-rail { position: static; width: 100%; max-height: none; flex-direction: row; overflow-x: auto; border-left: 1px solid var(--line); border-radius: 8px; }
+  .review.ws > .queue, .review.ws > .lines, .review.ws > .decide, .review.ws > .zones, .review.ws > .maincol { width: 100%; flex: 1 1 100%; position: static; max-height: none; }
+  .ws-ri.on::before { display: none; }
+  .ws-dbody { flex-direction: column; overflow: auto; }
+  .ws-layouts { width: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .ws-max { left: 8px; right: 8px; }
+}

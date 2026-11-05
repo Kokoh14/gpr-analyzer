@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/workflows.css">
 <link rel="stylesheet" href="/static/survey3d.css">
+<link rel="stylesheet" href="/static/workspace.css">
 <script type="importmap">{"imports":{"three":"/static/vendor/three/three.module.min.js"}}</script>
 </head>
 <body>
@@ -16,8 +17,9 @@
   <div class="job-meta" id="jobMeta"></div>
   <div class="exports" id="exports" hidden>
     <button class="btn primary" id="confirmBtn" title="ตรวจยืนยันทีละจุดทั้งงาน เรียงจากจุดเสี่ยงสูงสุด พร้อมแผนที่">โหมดตรวจยืนยัน</button>
+    <label class="ws-layout small" title="ผังหน้าจอ: เลือกชุดหน้าต่างที่เปิดพร้อมกัน เปิด/ปิดทีละหน้าต่างได้จากแถบไอคอนด้านซ้าย">ผัง <select id="wsLayout"></select></label>
     <button class="btn primary" id="summaryBtn" title="ตรวจข้อมูลสำคัญอีกครั้งก่อนออกรายงาน">สรุปก่อนออกรายงาน</button>
-    <span class="exp-label">ส่งออก</span>
+    <details class="exp-menu"><summary class="btn">ส่งออก ▾</summary><div class="exp-list">
     <a class="btn" data-package title="รายงาน PDF + Word, ตารางโซน CSV, แผนที่ KMZ, JSON, labels และ manifest ในไฟล์เดียว">รายงานครบชุด ZIP</a>
     <a class="btn" data-export="report.pdf">PDF</a>
     <a class="btn" data-export="report.docx">Word</a>
@@ -29,6 +31,7 @@
     <a class="btn ghost" data-export="zones-condor.zip" title=".cnf / .pobj / .lobj + manifest ระดับผิวและโซนที่ข้าม">Condor ZIP</a>
     <a class="btn ghost" id="labelsLink" title="บันทึกการตรวจทานทุกครั้ง สำหรับสอบเทียบภายหลัง">labels</a>
     <a class="btn ghost" data-export="comparison.csv" title="ผลเทียบกับซอฟต์แวร์อ้างอิง ทีละจุด (เปิดด้วย Excel)">เทียบผล CSV</a>
+    </div></details>
     <button class="btn ghost" id="newJob" title="เริ่มงานใหม่">งานใหม่</button>
   </div>
 </header>
@@ -150,7 +153,8 @@
 <div id="busy" class="busy" hidden><div class="spinner"></div><div id="busyText">กำลังประมวลผล…</div></div>
 
 <!-- ======================= review ======================= -->
-<main id="reviewView" class="review" hidden>
+<main id="reviewView" class="review ws" hidden>
+  <nav class="ws-rail" id="wsRail" aria-label="เปิด/ปิดหน้าต่าง"></nav>
   <aside class="queue" id="queuePanel">
     <div class="q-head"><h3>จุดที่ต้องตรวจ</h3><button class="btn small" id="confirmExit" title="กลับไปหน้าตรวจผลแบบเดิม">← หน้าเดิม</button></div>
     <div class="q-progress"><div class="bar"><span id="qBar"></span></div><span class="small" id="qProgress"></span></div>
@@ -258,6 +262,12 @@
       </details>
     </details>
     <div class="line-status" id="lineStatus"></div>
+    <section class="card ws-timeline" id="wsTimeline">
+      <div class="ws-tl-head"><b>คิวตรวจตามแนวระยะ</b> <span class="small muted" id="wsTlNote"></span></div>
+      <div class="ws-tl" id="wsTl"></div>
+      <div class="small muted ws-tl-legend"><span style="--c:var(--bad)">■</span> ระดับ E/1 <span style="--c:var(--warn)">■</span> ระดับ 2–3 / อื่น ๆ
+        <span style="--c:var(--accent)">■</span> สุ่มตรวจ <span style="--c:var(--ok)">■</span> ตัดสินแล้ว · คลิกเครื่องหมายเพื่อไปจุดนั้น เส้นดำ = ช่วงที่ภาพแสดงอยู่</div>
+    </section>
     <details class="card" id="thickCard">
       <summary>Depth-coloured thick slice · ใช้ดูเท่านั้น</summary>
       <p class="small muted">สี = ความลึกของ envelope ที่แรงที่สุดต่อ cell · ความสว่าง = แอมพลิจูด · ไม่เติมค่าระหว่างแนว · ไม่ใช่ผลจำแนกวัตถุ</p>
@@ -462,9 +472,11 @@
   <div id="summaryBody"></div>
 </main>
 
+<div class="ws-modal" id="wsStart" hidden></div>
 <div id="toast" class="toast" hidden></div>
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/workspace.js"></script>
 <script src="/static/workflows.js"></script>
 <script type="module" src="/static/survey3d.js"></script>
 <script src="/static/thick-slice.js"></script>
