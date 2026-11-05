@@ -268,6 +268,29 @@ const W = (() => {
   });
   const zoomed = applyZoom;  // keep the strip's window on the part of the line shown
   applyZoom = function (...a) { zoomed.apply(this, a); w.window(); };  // eslint-disable-line no-global-assign
+  // ------------------------------------------------------------ start page: the same rail opens and closes its parts
+  const HOME = [
+    { id: "jobs", name: "งานเดิม", full: "งานก่อนหน้า (เปิดต่อได้)", icon: "M4 5h16v14H4zM4 9h16M9 9v10" },
+    { id: "folder", name: "โฟลเดอร์", full: "เลือกโฟลเดอร์ข้อมูล + ตรวจความครบ + แผนที่", icon: "M3 6h6l2 2h10v11H3z" },
+    { id: "drop", name: "ลากไฟล์", full: "ลากไฟล์มาวาง (ทีละไฟล์)", icon: "M12 16V4M7 9l5-5 5 5M4 20h16" },
+    { id: "info", name: "ข้อมูลงาน", full: "ข้อมูลงานสำหรับรายงาน", icon: "M6 3h9l4 4v14H6zM9 12h7M9 16h7" },
+    { id: "demo", name: "ทดลอง", full: "ลองด้วยข้อมูลสังเคราะห์", icon: "M9 3h6M10 3v6l-5 9a2 2 0 002 3h10a2 2 0 002-3l-5-9V3" },
+  ];
+  const homeOpen = new Set(store("homeOpen", ["jobs", "folder", "info"]));
+  const paintHome = () => {
+    for (const p of HOME) $$(`[data-home="${p.id}"]`).forEach((el) => el.classList.toggle("ws-closed", !homeOpen.has(p.id)));
+    $("#homeRail").innerHTML = HOME.map((p) => `<button type="button" class="ws-ri ${homeOpen.has(p.id) ? "on" : ""}" data-home-t="${p.id}" title="${esc(p.full)}" aria-pressed="${homeOpen.has(p.id)}">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${p.icon}"/></svg>${p.name}</button>`).join("");
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 60);  // the scan map fits its new width
+  };
+  $("#homeRail").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-home-t]"); if (!b) return;
+    const id = b.dataset.homeT;
+    homeOpen.has(id) ? homeOpen.delete(id) : homeOpen.add(id);
+    keep("homeOpen", [...homeOpen]);
+    paintHome();
+  });
+  paintHome();
   return w;
 })();
 window.W = W;
