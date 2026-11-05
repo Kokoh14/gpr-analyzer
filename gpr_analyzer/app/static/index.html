@@ -37,8 +37,20 @@
 </header>
 
 <!-- ======================= upload ======================= -->
-<main id="uploadView" class="upload">
-  <section class="card" id="folderCard">
+<main id="uploadView" class="home ws">
+  <nav class="ws-rail" id="homeRail" aria-label="เปิด/ปิดส่วนของหน้าเริ่มงาน"></nav>
+  <aside class="card home-jobs" id="pastJobs" data-home="jobs">
+    <h3>งานก่อนหน้า <span class="muted small">(เก็บไว้ในเครื่อง เปิดต่อได้)</span></h3>
+    <div id="jobCards" class="job-cards"><p class="muted small">ยังไม่มีงาน เลือกโฟลเดอร์ข้อมูลตรงกลางเพื่อเริ่มงานแรก</p></div>
+    <div class="small muted">สรุปการเทียบผลของทุกงาน:</div>
+    <div class="actions left small">
+      <a class="btn ghost small" href="/api/compare/export/comparison_lines_all.csv">รายเส้น CSV</a>
+      <a class="btn ghost small" href="/api/compare/export/comparison_all.csv">รายจุด CSV</a>
+      <a class="btn ghost small" href="/api/compare/export/features_all.csv">คะแนนฟีเจอร์ CSV</a>
+    </div>
+  </aside>
+  <div class="home-main">
+  <section class="card" id="folderCard" data-home="folder">
     <h3>เลือกโฟลเดอร์ข้อมูล <span class="muted">(ImpulseRadar .iprh + .iprb พร้อม .cor GPS และ .mrk · IDS: เลือกโฟลเดอร์งาน .MIS หรือ .ZON)</span></h3>
     <div class="folder-bar">
       <button class="btn primary" id="pickBtn">📁 เลือกโฟลเดอร์…</button>
@@ -78,8 +90,8 @@
     </div>
   </section>
 
+  <div data-home="drop">
   <div class="or muted">หรือ</div>
-
   <section class="drop" id="drop" tabindex="0">
     <div class="drop-icon" aria-hidden="true">⇪</div>
     <div class="drop-title">ลากไฟล์ GPR มาวางที่นี่ หรือคลิกเพื่อเลือกไฟล์</div>
@@ -87,15 +99,18 @@
       รองรับ ImpulseRadar · MALA · GSSI .DZT · Sensors &amp; Software .DT1 · SEG-Y · IDS .dt (ทีละ 1 โฟลเดอร์ .ZON แนะนำให้ใช้ "เลือกโฟลเดอร์")</div>
     <input type="file" id="fileInput" multiple hidden>
   </section>
+  </div>
 
   <section class="filelist" id="fileList" hidden>
     <h3>ไฟล์ที่เลือก</h3>
     <table><thead><tr><th>ไฟล์</th><th>ขนาด</th><th>บทบาท</th><th></th></tr></thead><tbody></tbody></table>
   </section>
 
-  <section class="info card">
+  </div>
+  <aside class="home-side">
+  <section class="info card" data-home="info">
     <h3>ข้อมูลงาน <span class="muted">(ไม่บังคับ แก้ภายหลังได้)</span></h3>
-    <form id="infoForm" class="grid-form">
+    <form id="infoForm" class="stack-form">
       <label>โครงการ<input name="project"></label>
       <label>สถานที่<input name="site"></label>
       <label>ผู้ว่าจ้าง<input name="client"></label>
@@ -112,24 +127,25 @@
     </form>
   </section>
 
-  <div class="actions">
+  <section class="card home-start">
+    <h3>เริ่มงาน</h3>
+    <ol class="home-steps small" id="homeSteps">
+      <li id="stepFolder">เลือกโฟลเดอร์ข้อมูล แล้วกด "ตรวจโฟลเดอร์"</li>
+      <li id="stepLines">ติ๊กเส้นหรือช่วง กม. ที่จะประมวลผล</li>
+      <li>กดปุ่มด้านล่าง แล้วเลือกผังหน้าจอและหน้าต่างที่จะใช้</li>
+    </ol>
     <button class="btn primary big" id="runBtn" disabled>เริ่มวิเคราะห์</button>
-    <button class="btn big ghost" id="demoBtn">ลองด้วยข้อมูลสังเคราะห์</button>
-    <button class="btn big ghost" id="demo3dBtn">ลอง 3D แบบที่ 1 · แนวสแกนสังเคราะห์</button>
-    <button class="btn big ghost" id="demoVolumeBtn">ลอง 3D แบบที่ 2 · ปริมาตรสังเคราะห์</button>
-  </div>
-  <p class="muted center">ไฟล์ทั้งหมดอยู่ในเครื่องนี้เท่านั้น โปรแกรมเลือกฟิลเตอร์ให้อัตโนมัติ และปรับเองได้ในหน้าตรวจทาน</p>
-
-  <section class="card" id="pastJobs" hidden>
-    <h3>งานก่อนหน้า <span class="muted">(เก็บไว้ในเครื่อง เปิดต่อได้)</span></h3>
-    <table class="jobs"><thead><tr><th>งาน</th><th>ไฟล์</th><th>สถานะ</th><th>ตรวจแล้ว</th><th>เทียบกับซอฟต์แวร์อ้างอิง</th><th></th></tr></thead><tbody></tbody></table>
-    <div class="actions left">
-      <span class="muted small">สรุปการเทียบผลของทุกงาน:</span>
-      <a class="btn ghost" href="/api/compare/export/comparison_lines_all.csv">รายเส้น CSV</a>
-      <a class="btn ghost" href="/api/compare/export/comparison_all.csv">รายจุด CSV</a>
-      <a class="btn ghost" href="/api/compare/export/features_all.csv">คะแนนฟีเจอร์ CSV</a>
+    <p class="muted small">ไฟล์ทั้งหมดอยู่ในเครื่องนี้เท่านั้น โปรแกรมเลือกฟิลเตอร์ให้อัตโนมัติ และปรับเองได้ในหน้าตรวจทาน</p>
+  </section>
+  <section class="card" data-home="demo">
+    <h3>ลองด้วยข้อมูลสังเคราะห์</h3>
+    <div class="stack-btns">
+      <button class="btn" id="demoBtn">ข้อมูลสังเคราะห์ 2 เส้น</button>
+      <button class="btn" id="demo3dBtn">3D แบบที่ 1 · แนวสแกน</button>
+      <button class="btn" id="demoVolumeBtn">3D แบบที่ 2 · ปริมาตร</button>
     </div>
   </section>
+  </aside>
 </main>
 
 <!-- ======================= progress ======================= -->

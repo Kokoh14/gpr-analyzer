@@ -171,6 +171,8 @@ function renderScan() {
 function updateRunBtn() {
   const n = selectedLines().length, ns = chosenSections().length;
   $("#runBtn").disabled = !(n || S.files.length);
+  $("#stepFolder")?.classList.toggle("done", !!(S.scan || S.files.length));
+  $("#stepLines")?.classList.toggle("done", !!(n || S.files.length));
   $("#runBtn").textContent = ns ? `เริ่มประมวลผลเฉพาะ ${ns} ช่วง กม. ที่เลือก` : n ? `เริ่มประมวลผล ${n} เส้นจากโฟลเดอร์` : "เริ่มวิเคราะห์";
 }
 // sections of a project KML (risk points): only their windows are processed, results shown in railway km
@@ -325,16 +327,17 @@ async function resumeJob() {
 async function loadPastJobs() {
   let jobs = [];
   try { jobs = await api("/api/jobs"); } catch (e) { return; }
-  $("#pastJobs").hidden = !jobs.length;
-  $("#pastJobs tbody").innerHTML = jobs.map((j) => {
+  if (!jobs.length) return;
+  $("#jobCards").innerHTML = jobs.map((j) => {
     const r = j.review || {}, n = (r.auto || 0) + (r.accepted || 0) + (r.edited || 0) + (r.rejected || 0), c = j.compare;
-    const cmp = c && c.n_ref ? `อ้างอิง ${c.n_ref} จุด · ตรง ${c.match + c.partial} · เราไม่พบ ${c.missed} · เราพบเกิน ${c.extra}` : `<span class="muted">ยังไม่ได้เทียบ</span>`;
-    return `<tr><td><b>${esc(j.project || "งานสำรวจ")}</b><br><span class="small muted">${esc(j.job_id)}</span></td>
-      <td class="small">${(j.files || []).map(esc).join("<br>")}</td>
-      <td class="small">${j.state === "interrupted" ? `<span class="badge draft">ค้าง ${j.n_done ?? "?"}/${j.n_planned ?? "?"} ทำต่อได้</span>`
-        : j.state === "processing" ? "กำลังประมวลผล" : "เสร็จ"}</td>
-      <td>${n - (r.auto || 0)}/${n}</td><td class="small">${cmp}</td>
-      <td><a class="btn" href="#${esc(j.job_id)}" data-open="${esc(j.job_id)}">เปิด</a></td></tr>`;
+    const state = j.state === "interrupted" ? `<span class="badge draft">ค้าง ${j.n_done ?? "?"}/${j.n_planned ?? "?"} ทำต่อได้</span>`
+      : j.state === "processing" ? `<span class="badge">กำลังประมวลผล</span>` : `<span class="badge done">เสร็จ</span>`;
+    const files = j.files || [];
+    return `<a class="job-card" href="#${esc(j.job_id)}" data-open="${esc(j.job_id)}">
+      <span class="jc-top"><b>${esc(j.project || "งานสำรวจ")}</b>${state}</span>
+      <span class="small muted">${esc(j.site || "")} ${esc(j.job_id)}</span>
+      <span class="small">${files.length} ไฟล์${files.length ? ": " + esc(files.slice(0, 2).join(", ")) + (files.length > 2 ? " …" : "") : ""}</span>
+      <span class="small">ตรวจแล้ว ${n - (r.auto || 0)}/${n} โซน${c && c.n_ref ? ` · เทียบอ้างอิง ${c.n_ref} จุด ตรง ${c.match + c.partial}` : ""}</span></a>`;
   }).join("");
 }
 async function openJob(id) {

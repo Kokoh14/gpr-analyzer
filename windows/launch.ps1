@@ -73,9 +73,18 @@ if (-not (Test-Path (Join-Path $Root "pyproject.toml"))) {
 }
 
 if (-not $SmokeTest -and (Test-AppRunning)) {
-    Say "The app is already running; opening it in the browser." "Green"
-    if (-not $NoBrowser) { Start-Process $Url }
-    exit 0
+    # A newer version unpacked here while the old one still runs: stop the old app so the new one starts.
+    $installed = if (Test-Path $Stamp) { (Get-Content $Stamp -Raw).Trim() } else { "" }
+    if ($installed -eq (Get-SourceStamp)) {
+        Say "The app is already running; opening it in the browser." "Green"
+        if (-not $NoBrowser) { Start-Process $Url }
+        exit 0
+    }
+    Say "A newer version was unpacked: stopping the running app to start the new one..." "Yellow"
+    Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+        ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+    foreach ($i in 1..10) { if (-not (Test-AppRunning)) { break }; Start-Sleep 1 }
+    if (Test-AppRunning) { Fail "the old app is still running. Close its black window, then double-click START-GPR-ANALYZER.bat again." }
 }
 
 # ---------------------------------------------------------------- Python

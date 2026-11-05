@@ -35,6 +35,13 @@ def create_app(workdir: Path, background: bool = True) -> FastAPI:
     app.state.store = store
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
+    @app.middleware("http")
+    async def fresh_static(request, call_next):  # an updated program shows its new screens without Ctrl+F5
+        response = await call_next(request)
+        if request.url.path == "/" or (request.url.path.startswith("/static/") and "/vendor/" not in request.url.path):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     def job(job_id: str) -> Job:
         try:
             return store.get(job_id)

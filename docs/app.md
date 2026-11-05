@@ -71,6 +71,12 @@ labels file).
 
 ## Workspace (โต๊ะทำงาน, `static/workspace.js`)
 
+The start page uses the same frame: the rail opens and closes previous jobs (cards on the left), the data folder
+check with its map (centre), dropping files, job info and the synthetic demos (right), with the start button and
+its three steps always on the right. Which parts are open is kept in the browser. The processing page shows the
+file table and the log side by side. Page files are served with `Cache-Control: no-cache`, and the Windows
+launcher stops an app that is still running an older version before starting the newly unpacked one.
+
 The review page is one workspace. An icon rail on the left opens and closes each panel: confirm mode (queue +
 decision 1–4), lines, zone cards, map, the queue strip along the line, the radargram pictures (high gain,
 envelope, flat layers, automatic filters, ViewPoint), 3D, thick slice, comparison, workflow A/B and the processing
